@@ -91,3 +91,26 @@ def test_extract_refs4():
     refs = changelog.extract_refs(changelog.Commit(**commit_data))
     print(refs)
     assert {"abcd": [], "bbbb": ["branch_name"], "aaaa": ["main"]} == refs
+
+
+def test_make_version_line():
+    commit_data = make_commit_data(
+        {
+            "sha": "abcd",
+            "parents": "aaaa bbbb",
+            "refnames": [],
+            "body": "Merge branch 'feature/branch_name'",
+        }
+    )
+    commit = changelog.Commit(**commit_data)
+    version_line = changelog.make_version_line("", [commit])
+    assert "" == version_line
+
+    version_line = changelog.make_version_line("v1234", [commit])
+    assert "## v1234" == version_line
+
+    version_line = changelog.make_version_line("1234", [commit])
+    assert "## v.1234" == version_line
+
+    version_line = changelog.make_version_line("Current", [commit])
+    assert "## Current" == version_line

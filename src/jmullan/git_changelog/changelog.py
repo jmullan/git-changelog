@@ -341,16 +341,18 @@ def format_names(commits: list[Commit]) -> str | None:
 
 def make_version_line(release_version: str, commits: list[Commit]) -> str:
     version_string = f"{release_version}".strip()
-
+    if not len(version_string):
+        return ""
     if commits:
         first_commit = commits[0]
         date = first_commit.date
         parts = ["##"]
-        if version_string.startswith("v"):
-            parts.append("v.")
-        parts.append(version_string.strip())
+        if re.match("^[0-9]", version_string):
+            parts.append(f"v.{version_string}")
+        else:
+            parts.append(version_string)
 
-        if not date.startswith(version_string) and date not in version_string:
+        if date is not None and not date.startswith(version_string) and date not in version_string:
             parts.append(f"({date})")
         return " ".join(parts)
     return ""
