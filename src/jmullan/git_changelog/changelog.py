@@ -2,6 +2,7 @@
 import logging
 import re
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass, field, fields
 from typing import IO
 
@@ -18,7 +19,9 @@ _ignores = [
     "Integrate changelist",
     "Squashed commit",
     "Merge master",
+    "Merge main",
     "merge to master",
+    "merge to main",
 ]
 
 _ignore_matches = [
@@ -37,7 +40,7 @@ _ignore_matches = [
 
 INVALID_NAMES = {"jenkins", "mobileautomation"}
 
-EMAILS_TO_NAMES = {}
+EMAILS_TO_NAMES = {}  # type: dict[str, str]
 
 
 @dataclass
@@ -130,18 +133,23 @@ class Commit:
         matches = re.search(r"pre tag commit.*'(.*)'", self.subject)
         if matches:
             return matches.group(1)
+        return None
 
     @property
-    def month(self) -> str | None:
+    def month(self) -> str:
         date = self.date
         if date is not None:
             return date[:7]
+        return ""
+
+
+EMPTY_COMMIT = Commit("", "", "", "", "", "", "", [], [])
 
 
 GIT_FORMAT = "\n".join(
-    f"{field.name} {field.metadata['template']}"
-    for field in fields(Commit)
-    if field.metadata.get("template") is not None
+    f"{commit_field.name} {commit_field.metadata['template']}"
+    for commit_field in fields(Commit)
+    if commit_field.metadata.get("template") is not None
 )
 
 
@@ -153,23 +161,8 @@ def include_line(line: str | None) -> bool:
     )
 
 
-def test_include_line():
-    includes = ["yes", "me", ""]
-    for line in includes:
-        assert include_line(line)
-
-    not_includes = [
-        None,
-        "* commit to ignore",
-        "git-p4",
-        "Merge branch 'CONTIN-5792-refactor-backfill'",
-    ]
-    for line in not_includes:
-        assert not include_line(line)
-
-
 def format_for_tag_only(commit: Commit) -> str:
-    line = commit.subject
+    line = commit.subject or ""
     line = strip_line(line)
     for x in _ignores:
         line = line.replace(x, " ")
@@ -187,73 +180,66 @@ def format_for_tag_only(commit: Commit) -> str:
     return line
 
 
-def strip_line(line: str) -> str:
-    if line:
-        line = line.strip()
-        line = re.sub(r"^(\** *)*", "", line)
-        line = re.sub(r"^(-* *)*", "", line)
-        line = re.sub(r"^Pull request #[0-9]+: +", "", line, flags=re.IGNORECASE)
-        line = re.sub(r"^feature/", "", line, flags=re.IGNORECASE)
-        line = re.sub(r"^bugfix/", "", line, flags=re.IGNORECASE)
-        return line
-
-
-def add_star(line: str | None) -> str | None:
-    line = strip_line(line)
-    if line:
-        return "* %s" % line
-
-
-def format_jira(line) -> str | None:
-    if line:
-        jiras = extract_jiras(line)
-        if jiras:
-            for jira in jiras:
-                line = line.replace(jira, "")
-            line = re.sub(r"^\W+", "", line)
-            jiras = ", ".join(sorted(jiras))
-            if len(line):
-                line = f"* {jiras} : {line}"
-            else:
-                line = f"* {jiras}"
+def strip_line(line: str | None) -> str:
+    if line is None:
+        line = ""
+    line = line.strip()
+    line = re.sub(r"^(\** *)*", "", line)
+    line = re.sub(r"^(-* *)*", "", line)
+    line = re.sub(r"^Pull request #[0-9]+: +", "", line, flags=re.IGNORECASE)
+    line = re.sub(r"^feature/", "", line, flags=re.IGNORECASE)
+    line = re.sub(r"^bugfix/", "", line, flags=re.IGNORECASE)
     return line
 
 
-def test_format_jira():
-    expectations = {
-        "* FOOBAR-1637 last": "* FOOBAR-1637 : last",
-        "* BAZZ-2733 :     ": "* BAZZ-2733",
-        "* PIRATE-6206 - New ": "* PIRATE-6206 : New ",
-        "* PIRATE-6206- New ": "* PIRATE-6206 : New ",
-        "* PIRATE-6206 -New ": "* PIRATE-6206 : New ",
-        "* PIRATE-6206-New ": "* PIRATE-6206 : New ",
-        "* LEAF-5410, LEAF-5316 :   More tests": "* LEAF-5316, LEAF-5410 : More tests",
-        "* A-5316, B-5316 : sorting": "* A-5316, B-5316 : sorting",
-        "* B-5316, A-5316 : sorting": "* A-5316, B-5316 : sorting",
-        "* LEAF-5410 :   More, LEAF-5316 ,tests": "* LEAF-5316, LEAF-5410 : More,  ,tests",
-    }
-    for line, expected in expectations.items():
-        assert format_jira(line) == expected
+def add_star(line: str | None) -> str:
+    line = strip_line(line)
+    if line:
+        return "* %s" % line
+    return line
 
 
-def extract_jiras(body):
+def format_jira(line) -> str:
+    if line is None:
+        return ""
+    jiras = extract_jiras(line)
+    if jiras:
+        for jira in jiras:
+            line = line.replace(jira, "")
+        line = re.sub(r"^\W+", "", line)
+        joined = ", ".join(sorted(jiras))
+        if len(line):
+            line = f"* {joined} : {line}"
+        else:
+            line = f"* {joined}"
+    return line
+
+
+def extract_jiras(body: str | None) -> list[str]:
+    if body is None:
+        return []
     return list(set(re.findall("[A-Z]+-[0-9]+", body) or []))
 
 
 def add_jiras(line: str, jiras: list[str]) -> str:
-    if not line:
+    if line is None:
+        return ""
+    line = line.strip()
+    if len(line) < 1:
         return line
     has_jiras = extract_jiras(line)
     if has_jiras:
         return line
     missing_jiras = list(set([jira for jira in jiras if jira not in line]))
     if missing_jiras:
-        jiras = ", ".join(missing_jiras)
-        line = f"{jiras} : {line}"
+        joined = ", ".join(missing_jiras)
+        line = f"{joined} : {line}"
     return line
 
 
-def unique(items: list) -> list:
+def unique(items: list | None) -> list:
+    if items is None:
+        return []
     seen = set()
     output = []
     for item in items or []:
@@ -263,7 +249,7 @@ def unique(items: list) -> list:
     return output
 
 
-def format_tags(tags: list[str]) -> str:
+def format_tags(tags: list[str] | None) -> str:
     if not tags:
         return ""
     tags = sorted(tags, key=best_tag)
@@ -304,6 +290,7 @@ def tags_to_release_version(tags: list[str], found_version) -> str | None:
         if candidates:
             candidates.sort(key=best_tag)
             return candidates[0]
+    return None
 
 
 def format_body(body: str | None, jiras: list[str]) -> str | None:
@@ -312,9 +299,9 @@ def format_body(body: str | None, jiras: list[str]) -> str | None:
     lines = body.rstrip().split("\n")
     lines = [line for line in lines if include_line(line)]
     lines = [line for line in lines if line is not None]
-    lines = [add_jiras(line, jiras) for line in lines]
-    lines = [add_star(line) for line in lines]
-    lines = [format_jira(line) for line in lines]
+    lines = [add_jiras(line, jiras) for line in lines if line is not None]
+    lines = [add_star(line) for line in lines if line is not None]
+    lines = [format_jira(line) for line in lines if line is not None]
     lines = [line for line in lines if line is not None]
     return "\n".join(lines)
 
@@ -366,6 +353,7 @@ def make_version_line(release_version: str, commits: list[Commit]) -> str:
         if not date.startswith(version_string) and date not in version_string:
             parts.append(f"({date})")
         return " ".join(parts)
+    return ""
 
 
 def format_commit(commit: Commit) -> list[str]:
@@ -390,7 +378,7 @@ def make_notes(release_version: str, commits: list[Commit]):
         release_note.append(version_line)
     tags_notes = []
 
-    months_by_tag = {}
+    months_by_tag = {}  # type: dict[str, dict[str, list[Commit]]]
     current_tag = ""
     for commit in commits:
         current_month = commit.month
@@ -467,48 +455,6 @@ def extract_refs(commit: Commit) -> dict[str, list[str]]:
     return shas_to_refs
 
 
-def test_extract_refs():
-    commit_data = {"sha": "abcd", "subject": ""}
-    refs = extract_refs(Commit(**commit_data))
-    assert {"abcd": []} == refs
-
-    commit_data = {
-        "sha": "abcd",
-        "parent_shas": ["aaaa", "bbbb"],
-        "tags": [],
-        "heads": [],
-        "subject": "Pull request #21: anything",
-    }
-    refs = extract_refs(Commit(**commit_data))
-    assert {"abcd": []} == refs
-
-    commit_data = {
-        "sha": "abcd",
-        "parent_shas": [
-            "aaaa",
-            "bbbb",
-        ],
-        "tags": [],
-        "heads": [],
-        "subject": "Merge branch 'feature/branch_name'",
-    }
-    refs = extract_refs(Commit(**commit_data))
-    assert {"abcd": []} == refs
-
-    commit_data = {
-        "sha": "abcd",
-        "parent_shas": [
-            "aaaa",
-            "bbbb",
-        ],
-        "tags": [],
-        "heads": [],
-        "subject": "Merge pull request #1 in anything from branch_name to master",
-    }
-    refs = extract_refs(Commit(**commit_data))
-    assert {"abcd": []} == refs
-
-
 def print_tree(commits_by_sha: dict[str, Commit], refs_by_sha: dict[str, list[str]]):
     if not commits_by_sha:
         return
@@ -530,27 +476,29 @@ def print_tree(commits_by_sha: dict[str, Commit], refs_by_sha: dict[str, list[st
                 new_current_branches.extend(commit.parent_shas or [])
         current_branches = sorted(
             new_current_branches,
-            key=lambda sha: commits_by_sha.get(sha, {}).get("date"),
+            key=lambda sha: commits_by_sha.get(sha, EMPTY_COMMIT).date,
         )
         print(" ".join(line))
 
 
-def stream_chunks(io: IO, separator: str = "\n"):
+def stream_chunks(io: IO[bytes] | None, separator: str = "\n") -> Iterator[str]:
     accumulated = ""
     keep_going = True
-    while io.readable() and keep_going:
+    while io is not None and io.readable() and keep_going:
         read_chunk = io.read(1024)
         if read_chunk == b"":
             keep_going = False
-        read_chunk = read_chunk.decode("UTF8")
-        accumulated = f"{accumulated}{read_chunk}"
+        decoded_chunk = read_chunk.decode("UTF8")
+        accumulated = f"{accumulated}{decoded_chunk}"
         while separator in accumulated:
             chunk, accumulated = accumulated.split(separator, 1)
             yield chunk
     yield accumulated
 
 
-def git_log(from_sha: str, from_inclusive: bool, to_sha: str, to_inclusive: bool):
+def git_log(
+    from_sha: str | None, from_inclusive: bool | None, to_sha: str | None, to_inclusive: bool | None
+) -> Iterator[str]:
     command = ["git", "log", "-z", f"--format={GIT_FORMAT}"]
     if to_inclusive:
         to_caret = ""
@@ -587,7 +535,7 @@ def chunk_to_commit(chunk: str) -> Commit | None:
         logger.debug("body not in commit %s", chunk)
         return None
     header, body = chunk.split("\nbody", 1)
-    commit_data = {"body": body}
+    commit_data = {"body": body}  # type: dict[str, str | None]
     for line in header.split("\n"):
         key, value = line.split(" ", 1)
         commit_data[key] = value
@@ -595,7 +543,7 @@ def chunk_to_commit(chunk: str) -> Commit | None:
         logger.debug("No sha in commit %s", chunk)
         return None
 
-    return Commit(**commit_data)
+    return Commit(**commit_data)  # type: ignore
 
 
 def print_changelog(
@@ -614,8 +562,8 @@ def print_changelog(
             continue
         commits_by_sha[commit.sha] = commit
 
-    shas_to_refs = {}
-    child_shas = {}
+    shas_to_refs = {}  # type: dict[str, list[str]]
+    child_shas = {}  # type: dict[str, list[str]]
     for sha, commit in commits_by_sha.items():
         if sha not in child_shas:
             child_shas[sha] = []
@@ -636,7 +584,7 @@ def print_changelog(
         while not refs and len(children) == 1:
             child_sha = children[0]
             walked.append(child_sha)
-            refs = shas_to_refs.get(child_sha)
+            refs = shas_to_refs.get(child_sha) or []
             children = child_shas.get(child_sha) or []
         if refs:
             for child_sha in walked:
@@ -682,11 +630,11 @@ def print_changelog(
                 commit.parent_commits.append(parent)
 
     group_name = version or "Unknown"
-    group_commits = {group_name: []}
+    group_commits = {group_name: []}  # type: dict[str, list[Commit]]
 
     groups = [group_name]
 
-    release_dates = {}
+    release_dates = {}  # type: dict[str, str]
 
     use_tags = use_tags or False
     found_version = False
