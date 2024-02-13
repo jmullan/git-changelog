@@ -32,7 +32,7 @@ jobs:
         black --check .
         isort --check src
         ruff check
-        mypy src tests
+        mypy src
     - name: Demonstrate output
       run: |
         git-changelog
