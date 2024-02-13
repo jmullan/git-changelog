@@ -12,65 +12,42 @@ classifiers = [
 readme = "README.md"
 requires-python = ">=3.11"
 keywords = ["git"]
+dependencies = [
+    "jmullan_logging",
+    "jmullan_cmd"
+]
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "isort",
+    "mypy",
+    "pip",
+    "pytest",
+    "ruff>=0.1.8"
+]
 
 [project.urls]
 homepage = "https://github.com/jmullan/git-changelog"
 documentation = "https://github.com/jmullan/git-changelog"
 repository = "https://github.com/jmullan/git-changelog"
 
+[project.scripts]
+git-changelog = "jmullan.git_changelog.cli:main"
+
 [build-system]
 requires = [
-    "build",
-    "bumpr",
-    "pip",
-    "poetry-core>=1.0.0"
+    "hatchling"
 ]
-build-backend = "poetry.core.masonry.api"
+build-backend = "hatchling.build"
 
-[tool.poetry]
-name = "git-changelog"
-version = "1.0.0"
-description = "Produce a CHANGELOG from your git log."
-authors = [
-    "Jesse Mullan <jmullan@gmail.com>"
-]
-maintainers = [
-    "Jesse Mullan <jmullan@gmail.com>"
-]
-readme = "README.md"
-homepage = "https://github.com/jmullan/git-changelog"
-documentation = "https://github.com/jmullan/git-changelog"
-repository = "https://github.com/jmullan/git-changelog"
-keywords = ["git"]
-classifiers = [
-    "Topic :: Software Development",
-    "Intended Audience :: Developers"
-]
-packages = [
-    { include = "jmullan", from = "src"}
-]
-include = ["README.md"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/jmullan"]
 
-[tool.poetry.scripts]
-git-changelog = 'jmullan.git_changelog.cli:main'
-
-[tool.poetry.dependencies]
-python = ">=3.11"
-
-[tool.poetry.group.dev.dependencies]
-python = ">=3.11"
-black = "*"
-bumpr = "*"
-coverage = "*"
-isort = "*"
-mypy = "*"
-pip = "*"
-pytest = "*"
-ruff = ">=0.1.8"
 
 [tool.ruff]
 line-length = 100
-select = [
+lint.select = [
   "E",   # pycodestyle
   "F",   # pyflakes
   "UP",  # pyupgrade
@@ -90,7 +67,7 @@ extend_skip = "migrations"
 order_by_type = false
 combine_as_imports = true
 known_third_party = "django"
-known_internal = ["jmullan"]
+known_internal = ["jmullan", "jmullan_cmd", "jmullan_logging"]
 known_first_party = []
 sections=["FUTURE", "STDLIB", "THIRDPARTY", "INTERNAL", "FIRSTPARTY", "LOCALFOLDER"]
 

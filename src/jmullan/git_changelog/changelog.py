@@ -384,7 +384,9 @@ def format_commit(commit: Commit) -> List[str]:
 
 def make_notes(release_version: str, commits: List[Commit]):
     version_line = make_version_line(release_version, commits)
-    release_note = [version_line]
+    release_note = []
+    if version_line is not None and len(version_line):
+        release_note.append(version_line)
     tags_notes = []
 
     months_by_tag = {}
@@ -424,12 +426,8 @@ def make_notes(release_version: str, commits: List[Commit]):
                     tags_notes.append(formatted_names)
                 tags_notes.extend(month_commit_lines)
             first_month_in_tag = False
-
     if tags_notes:
-        tags_notes = "\n".join(tags_notes).split("\n")
-        # tags_notes = unique(tags_notes)
-        release_note.append("\n".join(tags_notes))
-        release_note.append("")
+        release_note.extend("\n".join(tags_notes).split("\n"))
         return "\n".join(release_note).strip()
 
 
@@ -551,17 +549,26 @@ def stream_chunks(io: IO, separator: str = "\n"):
     yield accumulated
 
 
-def git_log(from_sha: str, to_sha: str):
+def git_log(from_sha: str, from_inclusive: bool, to_sha: str, to_inclusive: bool):
 
     command = ["git", "log", "-z", f"--format={GIT_FORMAT}"]
+    if to_inclusive:
+        to_caret = ''
+    else:
+        to_caret = '^'
     if from_sha is not None:
+        if from_inclusive:
+            from_caret = '^'
+        else:
+            from_caret = ''
         if to_sha is None:
             to_sha = "HEAD"
-        sha_range = f"{from_sha}^..{to_sha}"
+            to_caret = ""
+        sha_range = f"{from_sha}{from_caret}..{to_sha}{to_caret}"
         command.append(sha_range)
     elif to_sha is not None:
         from_sha = first_sha()
-        sha_range = f"{from_sha}..{to_sha}"
+        sha_range = f"{from_sha}..{to_sha}{to_caret}"
         command.append(sha_range)
     with subprocess.Popen(command, stdout=subprocess.PIPE) as proc:
         for chunk in stream_chunks(proc.stdout, "\x00"):
@@ -578,7 +585,6 @@ def chunk_to_commit(chunk: str) -> Optional[Commit]:
     if chunk is None:
         return None
     if "\nbody" not in chunk:
-        print(repr(chunk))
         logger.debug("body not in commit %s", chunk)
         return None
     header, body = chunk.split("\nbody", 1)
@@ -595,11 +601,13 @@ def chunk_to_commit(chunk: str) -> Optional[Commit]:
 
 def print_changelog(
         from_sha: Optional[str] = None,
+        from_inclusive: Optional[bool] = False,
         to_sha: Optional[str] = None,
+        to_inclusive: Optional[bool] = False,
         version: Optional[str] = None,
         use_tags: Optional[bool] = False):
     commits_by_sha = {}  # type: Dict[str, Commit]
-    for chunk in git_log(from_sha, to_sha):
+    for chunk in git_log(from_sha, from_inclusive, to_sha, to_inclusive):
         commit = chunk_to_commit(chunk)
         if commit is None:
             logger.debug("None commit")
@@ -716,3 +724,4 @@ def print_changelog(
     if changes:
         # changes = reversed(changes)
         print("\n\n".join(changes))
+        print("\n")
