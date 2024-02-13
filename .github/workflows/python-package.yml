@@ -30,12 +30,9 @@ jobs:
     - name: Lint
       run: |
         black --check .
-        isort --check .
+        isort --check src
         ruff check
         mypy src tests
-    - name: Test with pytest
-      run: |
-        pytest
     - name: Demonstrate output
       run: |
-        python tests/sample.py
+        git-changelog

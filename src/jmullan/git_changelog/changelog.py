@@ -3,7 +3,7 @@ import logging
 import re
 import subprocess
 from dataclasses import dataclass, field, fields
-from typing import Dict, IO, List, Optional, Tuple
+from typing import IO
 
 logger = logging.getLogger(__name__)
 
@@ -48,20 +48,22 @@ class Commit:
     name: str = field(metadata={"template": "%an"})
     refnames: str = field(metadata={"template": "%D"})
     parents: str = field(metadata={"template": "%P"})
-    body: str = field(metadata={"template": "%B"})  # body must be last since it can have multiple lines
+    body: str = field(
+        metadata={"template": "%B"}
+    )  # body must be last since it can have multiple lines
 
-    parent_commits: List["Commit"] = field(default_factory=list)
-    additional_jiras: List[str] = field(default_factory=list)
-    likely_jiras: List[str] = field(default_factory=list)
+    parent_commits: list["Commit"] = field(default_factory=list)
+    additional_jiras: list[str] = field(default_factory=list)
+    likely_jiras: list[str] = field(default_factory=list)
 
     @property
-    def parent_shas(self) -> List[str]:
+    def parent_shas(self) -> list[str]:
         if self.parents is None:
             return []
         return self.parents.split(" ")
 
     @property
-    def tags(self) -> List[str]:
+    def tags(self) -> list[str]:
         tags = []
         refnames = self.refnames or ""
         if refnames:
@@ -83,14 +85,14 @@ class Commit:
         return heads
 
     @property
-    def jiras(self) -> List[str]:
+    def jiras(self) -> list[str]:
         return extract_jiras(self.body) + self.additional_jiras
 
-    def add_jiras(self, jiras: List[str]):
+    def add_jiras(self, jiras: list[str]):
         if jiras is not None:
             self.additional_jiras.extend(jiras)
 
-    def add_likely_jiras(self, jiras: List[str]):
+    def add_likely_jiras(self, jiras: list[str]):
         if jiras is not None:
             self.likely_jiras.extend(jiras)
 
@@ -124,13 +126,13 @@ class Commit:
         return bool(re.search("Merge.*to (master|main)", self.body))
 
     @property
-    def version(self) -> Optional[str]:
+    def version(self) -> str | None:
         matches = re.search(r"pre tag commit.*'(.*)'", self.subject)
         if matches:
             return matches.group(1)
 
     @property
-    def month(self) -> Optional[str]:
+    def month(self) -> str | None:
         date = self.date
         if date is not None:
             return date[:7]
@@ -139,11 +141,11 @@ class Commit:
 GIT_FORMAT = "\n".join(
     f"{field.name} {field.metadata['template']}"
     for field in fields(Commit)
-    if field.metadata.get('template') is not None
+    if field.metadata.get("template") is not None
 )
 
 
-def include_line(line: Optional[str]) -> bool:
+def include_line(line: str | None) -> bool:
     return (
         line is not None
         and not any(x in line for x in _ignores)
@@ -196,13 +198,13 @@ def strip_line(line: str) -> str:
         return line
 
 
-def add_star(line: Optional[str]) -> Optional[str]:
+def add_star(line: str | None) -> str | None:
     line = strip_line(line)
     if line:
         return "* %s" % line
 
 
-def format_jira(line) -> Optional[str]:
+def format_jira(line) -> str | None:
     if line:
         jiras = extract_jiras(line)
         if jiras:
@@ -225,10 +227,10 @@ def test_format_jira():
         "* PIRATE-6206- New ": "* PIRATE-6206 : New ",
         "* PIRATE-6206 -New ": "* PIRATE-6206 : New ",
         "* PIRATE-6206-New ": "* PIRATE-6206 : New ",
-        "* LEAF-5410, LEAF-5316 :   More cleanup, tests": "* LEAF-5316, LEAF-5410 : More cleanup, tests",
+        "* LEAF-5410, LEAF-5316 :   More tests": "* LEAF-5316, LEAF-5410 : More tests",
         "* A-5316, B-5316 : sorting": "* A-5316, B-5316 : sorting",
         "* B-5316, A-5316 : sorting": "* A-5316, B-5316 : sorting",
-        "* LEAF-5410 :   More cleanup, LEAF-5316 ,tests": "* LEAF-5316, LEAF-5410 : More cleanup,  ,tests",
+        "* LEAF-5410 :   More, LEAF-5316 ,tests": "* LEAF-5316, LEAF-5410 : More,  ,tests",
     }
     for line, expected in expectations.items():
         assert format_jira(line) == expected
@@ -238,7 +240,7 @@ def extract_jiras(body):
     return list(set(re.findall("[A-Z]+-[0-9]+", body) or []))
 
 
-def add_jiras(line: str, jiras: List[str]) -> str:
+def add_jiras(line: str, jiras: list[str]) -> str:
     if not line:
         return line
     has_jiras = extract_jiras(line)
@@ -251,7 +253,7 @@ def add_jiras(line: str, jiras: List[str]) -> str:
     return line
 
 
-def unique(items: List) -> List:
+def unique(items: list) -> list:
     seen = set()
     output = []
     for item in items or []:
@@ -261,7 +263,7 @@ def unique(items: List) -> List:
     return output
 
 
-def format_tags(tags: List[str]) -> str:
+def format_tags(tags: list[str]) -> str:
     if not tags:
         return ""
     tags = sorted(tags, key=best_tag)
@@ -269,7 +271,7 @@ def format_tags(tags: List[str]) -> str:
     return f"### tags: {tags_line}"
 
 
-def best_tag(tag: str) -> Tuple[bool, bool, bool, int, str]:
+def best_tag(tag: str) -> tuple[bool, bool, bool, int, str]:
     if tag is None:
         tag = ""
     has_snapshot = "SNAPSHOT" in tag
@@ -284,7 +286,7 @@ def best_tag(tag: str) -> Tuple[bool, bool, bool, int, str]:
     )
 
 
-def tags_to_release_version(tags: List[str], found_version) -> Optional[str]:
+def tags_to_release_version(tags: list[str], found_version) -> str | None:
     semantic_versions = []
     semantic_sub_versions = []
     other_tags = []
@@ -304,7 +306,7 @@ def tags_to_release_version(tags: List[str], found_version) -> Optional[str]:
             return candidates[0]
 
 
-def format_body(body: Optional[str], jiras: List[str]) -> Optional[str]:
+def format_body(body: str | None, jiras: list[str]) -> str | None:
     if body is None:
         return None
     lines = body.rstrip().split("\n")
@@ -317,7 +319,7 @@ def format_body(body: Optional[str], jiras: List[str]) -> Optional[str]:
     return "\n".join(lines)
 
 
-def valid_name(name: Optional[str]) -> bool:
+def valid_name(name: str | None) -> bool:
     if name is None:
         return False
     name = name.strip()
@@ -340,8 +342,7 @@ def smart_name(commit: Commit):
         return EMAILS_TO_NAMES[email]
 
 
-
-def format_names(commits: List[Commit]) -> Optional[str]:
+def format_names(commits: list[Commit]) -> str | None:
     if not commits:
         return None
     names = set(smart_name(commit) for commit in commits)
@@ -351,7 +352,7 @@ def format_names(commits: List[Commit]) -> Optional[str]:
     return ", ".join(sorted(names))
 
 
-def make_version_line(release_version: str, commits: List[Commit]) -> str:
+def make_version_line(release_version: str, commits: list[Commit]) -> str:
     version_string = f"{release_version}".strip()
 
     if commits:
@@ -367,7 +368,7 @@ def make_version_line(release_version: str, commits: List[Commit]) -> str:
         return " ".join(parts)
 
 
-def format_commit(commit: Commit) -> List[str]:
+def format_commit(commit: Commit) -> list[str]:
     subject = commit.subject
     if not include_line(subject):
         return []
@@ -382,7 +383,7 @@ def format_commit(commit: Commit) -> List[str]:
     return "\n".join(commit_lines).split("\n")
 
 
-def make_notes(release_version: str, commits: List[Commit]):
+def make_notes(release_version: str, commits: list[Commit]):
     version_line = make_version_line(release_version, commits)
     release_note = []
     if version_line is not None and len(version_line):
@@ -431,7 +432,7 @@ def make_notes(release_version: str, commits: List[Commit]):
         return "\n".join(release_note).strip()
 
 
-def prune_heads(heads: List[str]) -> List[str]:
+def prune_heads(heads: list[str]) -> list[str]:
     new_heads = []
     for head in heads:
         if head.startswith("HEAD ->"):
@@ -443,7 +444,7 @@ def prune_heads(heads: List[str]) -> List[str]:
     return new_heads
 
 
-def extract_refs(commit: Commit) -> Dict[str, List[str]]:
+def extract_refs(commit: Commit) -> dict[str, list[str]]:
     sha = commit.sha
     parent_shas = commit.parent_shas or []
     heads = commit.heads or []
@@ -508,7 +509,7 @@ def test_extract_refs():
     assert {"abcd": []} == refs
 
 
-def print_tree(commits_by_sha: Dict[str, Commit], refs_by_sha: Dict[str, List[str]]):
+def print_tree(commits_by_sha: dict[str, Commit], refs_by_sha: dict[str, list[str]]):
     if not commits_by_sha:
         return
     head = list(commits_by_sha.keys())[0]
@@ -550,17 +551,16 @@ def stream_chunks(io: IO, separator: str = "\n"):
 
 
 def git_log(from_sha: str, from_inclusive: bool, to_sha: str, to_inclusive: bool):
-
     command = ["git", "log", "-z", f"--format={GIT_FORMAT}"]
     if to_inclusive:
-        to_caret = ''
+        to_caret = ""
     else:
-        to_caret = '^'
+        to_caret = "^"
     if from_sha is not None:
         if from_inclusive:
-            from_caret = '^'
+            from_caret = "^"
         else:
-            from_caret = ''
+            from_caret = ""
         if to_sha is None:
             to_sha = "HEAD"
             to_caret = ""
@@ -571,8 +571,7 @@ def git_log(from_sha: str, from_inclusive: bool, to_sha: str, to_inclusive: bool
         sha_range = f"{from_sha}..{to_sha}{to_caret}"
         command.append(sha_range)
     with subprocess.Popen(command, stdout=subprocess.PIPE) as proc:
-        for chunk in stream_chunks(proc.stdout, "\x00"):
-            yield chunk
+        yield from stream_chunks(proc.stdout, "\x00")
 
 
 def first_sha() -> str:
@@ -581,7 +580,7 @@ def first_sha() -> str:
     return result.stdout.decode("UTF8").strip()
 
 
-def chunk_to_commit(chunk: str) -> Optional[Commit]:
+def chunk_to_commit(chunk: str) -> Commit | None:
     if chunk is None:
         return None
     if "\nbody" not in chunk:
@@ -600,13 +599,14 @@ def chunk_to_commit(chunk: str) -> Optional[Commit]:
 
 
 def print_changelog(
-        from_sha: Optional[str] = None,
-        from_inclusive: Optional[bool] = False,
-        to_sha: Optional[str] = None,
-        to_inclusive: Optional[bool] = False,
-        version: Optional[str] = None,
-        use_tags: Optional[bool] = False):
-    commits_by_sha = {}  # type: Dict[str, Commit]
+    from_sha: str | None = None,
+    from_inclusive: bool | None = False,
+    to_sha: str | None = None,
+    to_inclusive: bool | None = False,
+    version: str | None = None,
+    use_tags: bool | None = False,
+):
+    commits_by_sha = {}  # type: dict[str, Commit]
     for chunk in git_log(from_sha, from_inclusive, to_sha, to_inclusive):
         commit = chunk_to_commit(chunk)
         if commit is None:
@@ -669,9 +669,7 @@ def print_changelog(
 
                 if not parent.jiras:
                     if commit.is_merge_to_main or shares_subject:
-                        logger.debug(
-                            f"adding {commit.jiras} from child {sha} to {parent_sha}"
-                        )
+                        logger.debug(f"adding {commit.jiras} from child {sha} to {parent_sha}")
                         parent.add_jiras(commit.jiras)
                     else:
                         parent.add_likely_jiras(commit.jiras)

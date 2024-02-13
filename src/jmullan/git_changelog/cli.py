@@ -1,22 +1,11 @@
 #!/usr/bin/env python3.11
-import datetime
-import io
-import json
 import logging
-import os
-import sys
-import traceback
-from argparse import ArgumentParser
-from signal import signal, SIGPIPE
-from typing import Any, Dict, Mapping, Optional
 
 from jmullan.git_changelog.changelog import print_changelog
-
-logger = logging.getLogger(__name__)
-
-
 from jmullan_cmd import cmd
 from jmullan_logging import easy_logging
+
+logger = logging.getLogger(__name__)
 
 
 class ChangeLogMain(cmd.Main):
@@ -69,7 +58,9 @@ class ChangeLogMain(cmd.Main):
         to_sha = self.args.until or self.args.through
         to_inclusive = to_sha is None or self.args.through is not None
 
-        print_changelog(from_sha, from_inclusive, to_sha, to_inclusive, self.args.version, self.args.tags)
+        print_changelog(
+            from_sha, from_inclusive, to_sha, to_inclusive, self.args.version, self.args.tags
+        )
 
 
 def main():
