@@ -53,16 +53,20 @@ def print_authors(
         if csv_tuple not in seen_tuples:
             seen_tuples.add(csv_tuple)
             tuples.append(csv_tuple)
-    if output_format == "csv":
+    if output_format == "csv" or output_format == "mail-map":
         if ordering == "email":
             data = sorted(tuples, key=lambda csv_tuple: csv_tuple[0])
         elif ordering == "name":
             data = sorted(tuples, key=lambda csv_tuple: csv_tuple[2])
         else:
             data = tuples
-        writer = csv.writer(sys.stdout)
-        for csv_tuple in data:
-            writer.writerow(csv_tuple)
+        if output_format == "csv":
+            writer = csv.writer(sys.stdout)
+            for csv_tuple in data:
+                writer.writerow(csv_tuple)
+        else:
+            for email, username, name in data:
+                print(f"{name} <{email}> {name} <{email}>")
     else:
         if ordering == "email":
             data = sorted(emails_to_authors.items(), key=lambda item: item[0])
@@ -70,11 +74,7 @@ def print_authors(
             data = sorted(emails_to_authors.items(), key=lambda item: item[1])
         else:
             data = emails_to_authors.items()
-        if output_format == "mail-map":
-            print("# correct name <email> wrong name <email>")
-            for email, name in data:
-                print(f"{name} <{email}> {name} <{email}>")
-        elif output_format == "pyproject":
+        if output_format == "pyproject":
             print("authors = [")
             lines = [
                 '    {name = "%s", email = "%s"}' % (name, email)

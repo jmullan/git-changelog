@@ -47,8 +47,8 @@ EMAILS_TO_NAMES = {}  # type: dict[str, str]
 class Commit:
     sha: str = field(metadata={"template": "%H"})
     date: str = field(metadata={"template": "%as"})
-    email: str = field(metadata={"template": "%ae"})
-    name: str = field(metadata={"template": "%an"})
+    email: str = field(metadata={"template": "%aE"})
+    name: str = field(metadata={"template": "%aN"})
     refnames: str = field(metadata={"template": "%D"})
     parents: str = field(metadata={"template": "%P"})
     body: str = field(

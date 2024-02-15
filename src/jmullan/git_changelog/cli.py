@@ -43,13 +43,6 @@ class ChangeLogMain(cmd.Main):
             default=False,
             help="Use tags and other found versions",
         )
-        self.parser.add_argument(
-            "--tags",
-            dest="tags",
-            action="store_true",
-            default=False,
-            help="Use tags and other found versions",
-        )
         self.parser.add_argument("version", default="Current", nargs="?")
 
     def main(self):
