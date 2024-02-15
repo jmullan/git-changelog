@@ -498,10 +498,9 @@ def stream_chunks(io: IO[bytes] | None, separator: str = "\n") -> Iterator[str]:
     yield accumulated
 
 
-def git_log(
-    from_sha: str | None, from_inclusive: bool | None, to_sha: str | None, to_inclusive: bool | None
+def git_log(git_format: str, from_sha: str | None, from_inclusive: bool | None, to_sha: str | None, to_inclusive: bool | None
 ) -> Iterator[str]:
-    command = ["git", "log", "-z", f"--format={GIT_FORMAT}"]
+    command = ["git", "log", "-z", f"--format={git_format}"]
     if to_inclusive:
         to_caret = ""
     else:
@@ -557,7 +556,7 @@ def print_changelog(
     use_tags: bool | None = False,
 ):
     commits_by_sha = {}  # type: dict[str, Commit]
-    for chunk in git_log(from_sha, from_inclusive, to_sha, to_inclusive):
+    for chunk in git_log(GIT_FORMAT, from_sha, from_inclusive, to_sha, to_inclusive):
         commit = chunk_to_commit(chunk)
         if commit is None:
             logger.debug("None commit")

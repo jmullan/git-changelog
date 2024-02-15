@@ -34,6 +34,7 @@ repository = "https://github.com/jmullan/git-changelog"
 
 [project.scripts]
 git-changelog = "jmullan.git_changelog.cli:main"
+git-authors = "jmullan.git_changelog.authors:main"
 
 [build-system]
 requires = [

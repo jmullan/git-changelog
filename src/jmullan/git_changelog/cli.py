@@ -33,10 +33,17 @@ class ChangeLogMain(cmd.Main):
             "--until",
             dest="until",
             default=None,
-            help="up to but not including this comit",
+            help="up to but not including this commit",
         )
         self.parser.add_argument(
             "-t",
+            "--tags",
+            dest="tags",
+            action="store_true",
+            default=False,
+            help="Use tags and other found versions",
+        )
+        self.parser.add_argument(
             "--tags",
             dest="tags",
             action="store_true",
