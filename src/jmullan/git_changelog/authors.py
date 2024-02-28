@@ -37,7 +37,7 @@ def print_authors(
     emails_to_authors = dict()
     tuples = []
     seen_tuples = set()
-    for line in changelog.git_log(git_format, from_sha, from_inclusive, to_sha, to_inclusive):
+    for line in changelog.git_log(git_format, from_sha, from_inclusive, to_sha, to_inclusive, reversed=True):
         if line is None or len(line) < 1:
             continue
         logger.debug(line)
@@ -73,7 +73,8 @@ def print_authors(
         elif ordering == "name":
             data = sorted(emails_to_authors.items(), key=lambda item: item[1])
         else:
-            data = emails_to_authors.items()
+            data = list(emails_to_authors.items())
+            data.reverse()
         if output_format == "pyproject":
             print("authors = [")
             lines = [

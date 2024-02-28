@@ -498,8 +498,7 @@ def stream_chunks(io: IO[bytes] | None, separator: str = "\n") -> Iterator[str]:
     yield accumulated
 
 
-def git_log(git_format: str, from_sha: str | None, from_inclusive: bool | None, to_sha: str | None, to_inclusive: bool | None
-) -> Iterator[str]:
+def git_log(git_format: str, from_sha: str | None, from_inclusive: bool | None, to_sha: str | None, to_inclusive: bool | None, reversed: bool | None = None) -> Iterator[str]:
     command = ["git", "log", "-z", f"--format={git_format}"]
     if to_inclusive:
         to_caret = ""
@@ -519,6 +518,8 @@ def git_log(git_format: str, from_sha: str | None, from_inclusive: bool | None, 
         from_sha = first_sha()
         sha_range = f"{from_sha}..{to_sha}{to_caret}"
         command.append(sha_range)
+    if reversed:
+        command.append("--reverse")
     with subprocess.Popen(command, stdout=subprocess.PIPE) as proc:
         yield from stream_chunks(proc.stdout, "\x00")
 
