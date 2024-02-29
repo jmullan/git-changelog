@@ -3,17 +3,17 @@ import csv
 import logging
 import sys
 
+from jmullan.git_changelog import changelog
 from jmullan_cmd import cmd
 from jmullan_logging import easy_logging
-from jmullan.git_changelog import changelog
 
 logger = logging.getLogger(__name__)
 
 formats = {
-    'simple': '{name or username} <{email}>',
-    'csv': '{email},{username},{name}',
-    'mail-map': 'correct name <email> wrong name <email>',
-    'pyproject': 'The authors stanza of a pyproject.toml'
+    "simple": "{name or username} <{email}>",
+    "csv": "{email},{username},{name}",
+    "mail-map": "correct name <email> wrong name <email>",
+    "pyproject": "The authors stanza of a pyproject.toml",
 }
 FORMAT_DOC = "\n  ".join(f"{x}: {y}" for x, y in formats.items())
 DEFAULT_FORMAT = "simple"
@@ -27,7 +27,7 @@ def print_authors(
     to_sha: str | None = None,
     to_inclusive: bool | None = False,
     output_format: str | None = DEFAULT_FORMAT,
-    ordering: str | None = DEFAULT_ORDERING
+    ordering: str | None = DEFAULT_ORDERING,
 ):
     if output_format is None:
         output_format = DEFAULT_FORMAT
@@ -37,7 +37,9 @@ def print_authors(
     emails_to_authors = dict()
     tuples = []
     seen_tuples = set()
-    for line in changelog.git_log(git_format, from_sha, from_inclusive, to_sha, to_inclusive, reversed=True):
+    for line in changelog.git_log(
+        git_format, from_sha, from_inclusive, to_sha, to_inclusive, reversed=True
+    ):
         if line is None or len(line) < 1:
             continue
         logger.debug(line)
@@ -78,14 +80,14 @@ def print_authors(
         if output_format == "pyproject":
             print("authors = [")
             lines = [
-                '    {name = "%s", email = "%s"}' % (name, email)
-                for email, name in data if data
+                '    {name = "%s", email = "%s"}' % (name, email) for email, name in data if data
             ]
             print(",\n".join(lines))
             print("]")
         else:
             for email, name in data:
                 print(f"{name} <{email}>")
+
 
 class AuthorsMain(cmd.Main):
     def __init__(self):
@@ -119,14 +121,14 @@ class AuthorsMain(cmd.Main):
             dest="format",
             default=DEFAULT_FORMAT,
             choices=list(formats.keys()),
-            help=f"How to display the authors.\n{FORMAT_DOC}"
+            help=f"How to display the authors.\n{FORMAT_DOC}",
         )
         self.parser.add_argument(
             "--order-by",
             dest="ordering",
             default=DEFAULT_ORDERING,
             choices=orderings,
-            help="What order to show the authors."
+            help="What order to show the authors.",
         )
 
     def main(self):
