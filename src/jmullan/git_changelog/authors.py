@@ -28,6 +28,7 @@ def print_authors(
     to_inclusive: bool | None = False,
     output_format: str | None = DEFAULT_FORMAT,
     ordering: str | None = DEFAULT_ORDERING,
+    files: list[str] | None = None,
 ):
     if output_format is None:
         output_format = DEFAULT_FORMAT
@@ -38,7 +39,7 @@ def print_authors(
     tuples = []
     seen_tuples = set()
     for line in changelog.git_log(
-        git_format, from_sha, from_inclusive, to_sha, to_inclusive, reversed=True
+        git_format, from_sha, from_inclusive, to_sha, to_inclusive, reversed=True, files=files
     ):
         if line is None or len(line) < 1:
             continue
@@ -130,6 +131,7 @@ class AuthorsMain(cmd.Main):
             choices=orderings,
             help="What order to show the authors.",
         )
+        self.parser.add_argument('--file', dest="files", action="append", default=[], required=False)
 
     def main(self):
         super().main()
@@ -143,9 +145,10 @@ class AuthorsMain(cmd.Main):
         from_inclusive = from_sha is None or self.args.since is not None
         to_sha = self.args.until or self.args.through
         to_inclusive = to_sha is None or self.args.through is not None
+        files = self.args.files or []
 
         print_authors(
-            from_sha, from_inclusive, to_sha, to_inclusive, self.args.format, self.args.ordering
+            from_sha, from_inclusive, to_sha, to_inclusive, self.args.format, self.args.ordering, files
         )
 
 

@@ -484,18 +484,18 @@ def print_tree(commits_by_sha: dict[str, Commit], refs_by_sha: dict[str, list[st
 
 
 def stream_chunks(io: IO[bytes] | None, separator: str = "\n") -> Iterator[str]:
-    accumulated = ""
+    separator_bytes = separator.encode("UTF8")
+    accumulated = bytearray()
     keep_going = True
     while io is not None and io.readable() and keep_going:
         read_chunk = io.read(1024)
         if read_chunk == b"":
             keep_going = False
-        decoded_chunk = read_chunk.decode("UTF8")
-        accumulated = f"{accumulated}{decoded_chunk}"
-        while separator in accumulated:
-            chunk, accumulated = accumulated.split(separator, 1)
-            yield chunk
-    yield accumulated
+        accumulated.extend(read_chunk)
+        while separator_bytes in accumulated:
+            chunk, accumulated = accumulated.split(separator_bytes, 1)
+            yield chunk.decode("UTF8")
+    yield accumulated.decode("UTF8")
 
 
 def git_log(
@@ -505,6 +505,7 @@ def git_log(
     to_sha: str | None,
     to_inclusive: bool | None,
     reversed: bool | None = None,
+    files: list[str] | None = None
 ) -> Iterator[str]:
     command = ["git", "log", "-z", f"--format={git_format}"]
     if to_inclusive:
@@ -527,6 +528,8 @@ def git_log(
         command.append(sha_range)
     if reversed:
         command.append("--reverse")
+    if files:
+        command.extend(files)
     with subprocess.Popen(command, stdout=subprocess.PIPE) as proc:
         yield from stream_chunks(proc.stdout, "\x00")
 
@@ -562,9 +565,10 @@ def print_changelog(
     to_inclusive: bool | None = False,
     version: str | None = None,
     use_tags: bool | None = False,
+    files: list[str] | None = None
 ):
     commits_by_sha = {}  # type: dict[str, Commit]
-    for chunk in git_log(GIT_FORMAT, from_sha, from_inclusive, to_sha, to_inclusive):
+    for chunk in git_log(GIT_FORMAT, from_sha, from_inclusive, to_sha, to_inclusive, files=files):
         commit = chunk_to_commit(chunk)
         if commit is None:
             logger.debug("None commit")

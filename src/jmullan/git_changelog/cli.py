@@ -43,6 +43,7 @@ class ChangeLogMain(cmd.Main):
             default=False,
             help="Use tags and other found versions",
         )
+        self.parser.add_argument('--file', dest="files", action="append", default=[], required=False)
         self.parser.add_argument("version", default="Current", nargs="?")
 
     def main(self):
@@ -52,6 +53,7 @@ class ChangeLogMain(cmd.Main):
         else:
             easy_logging.easy_initialize_logging()
         logger.debug(self.args)
+        files = self.args.files or []
 
         from_sha = self.args.after or self.args.since
         from_inclusive = from_sha is None or self.args.since is not None
@@ -59,7 +61,7 @@ class ChangeLogMain(cmd.Main):
         to_inclusive = to_sha is None or self.args.through is not None
 
         print_changelog(
-            from_sha, from_inclusive, to_sha, to_inclusive, self.args.version, self.args.tags
+            from_sha, from_inclusive, to_sha, to_inclusive, self.args.version, self.args.tags, files
         )
 
 
