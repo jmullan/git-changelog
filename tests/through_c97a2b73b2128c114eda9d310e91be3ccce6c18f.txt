@@ -1,0 +1,45 @@
+# Current (2024-03-22)
+Jesse Mullan
+* Allow specifying specific files for changelogs
+
+### 2024-02
+Jesse Mullan
+* Various
+* Respect .mailmap in git-changelog, output full mail-map template when outputting mail map template
+* Add git-authors command
+* Only prepend v on the version line if the version starts with a number. Closes #1
+* Move tests to tests dir (so they run), fix mypy stuffs
+* Fix mypy
+
+### Tags: `v1.2`
+### 2024-02
+Jesse Mullan
+* Update pyproject.toml and fix linting
+
+## Tag: `v1.1` Fixes a github action.
+    This is a tag with a longer annotation for the purpose of testing how to read
+    the annotations of a tag.
+
+    Unfortunately, most of the body of this tag has nothing to do with the commit
+    itself.
+
+    Here is some unrelated text:
+    foo
+    bar
+    baz
+    monkey
+    pirate
+
+### 2024-02
+Jesse Mullan
+* Fix github action
+
+## Tag: `v1.0` Works!
+### Tags: `works`, `demo_tag`
+### 2024-01
+Jesse Mullan
+* working code
+
+### 2023-12
+Jesse Mullan
+* Initial commit

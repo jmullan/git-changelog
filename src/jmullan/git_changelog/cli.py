@@ -1,9 +1,10 @@
 #!/usr/bin/env python3.11
 import logging
 
-from jmullan.git_changelog.changelog import print_changelog
 from jmullan_cmd import cmd
 from jmullan_logging import easy_logging
+
+from jmullan.git_changelog.changelog import print_changelog
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +39,14 @@ class ChangeLogMain(cmd.Main):
         self.parser.add_argument(
             "-t",
             "--tags",
-            dest="tags",
+            dest="tag_names",
             action="store_true",
             default=False,
             help="Use tags and other found versions",
         )
-        self.parser.add_argument('--file', dest="files", action="append", default=[], required=False)
+        self.parser.add_argument(
+            "--file", dest="files", action="append", default=[], required=False
+        )
         self.parser.add_argument("version", default="Current", nargs="?")
 
     def main(self):
@@ -61,7 +64,13 @@ class ChangeLogMain(cmd.Main):
         to_inclusive = to_sha is None or self.args.through is not None
 
         print_changelog(
-            from_sha, from_inclusive, to_sha, to_inclusive, self.args.version, self.args.tags, files
+            from_sha,
+            from_inclusive,
+            to_sha,
+            to_inclusive,
+            self.args.version,
+            self.args.tag_names,
+            files,
         )
 
 

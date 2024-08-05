@@ -19,12 +19,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "black",
-    "isort",
+    "pre-commit",
     "mypy",
     "pip",
     "pytest",
-    "ruff>=0.1.8"
+    "ruff"
 ]
 
 [project.urls]
@@ -42,6 +41,17 @@ requires = [
 ]
 build-backend = "hatchling.build"
 
+[tool.mypy]
+namespace_packages = "true"
+mypy_path = "src"
+python_version = "3.11"
+ignore_missing_imports = true
+enable_error_code = [
+    "ignore-without-code"
+]
+warn_return_any = true
+warn_unused_configs = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/jmullan"]
 
@@ -55,36 +65,18 @@ lint.select = [
   "F",   # pyflakes
   "UP",  # pyupgrade
   # "D",   # pydocstyle
-  # "I",   # isort
+  "I",   # isort
 ]
 
-[tool.isort]
-profile = "black"
-src_paths = ["src"]
-multi_line_output = 3
-include_trailing_comma = true
-force_grid_wrap = 0
-use_parentheses = true
-line_length = 100
-extend_skip = "migrations"
-order_by_type = false
-combine_as_imports = true
-known_third_party = "django"
-known_internal = ["jmullan", "jmullan_cmd", "jmullan_logging"]
-known_first_party = []
-sections=["FUTURE", "STDLIB", "THIRDPARTY", "INTERNAL", "FIRSTPARTY", "LOCALFOLDER"]
 
-[tool.black]  # https://black.readthedocs.io/en/stable/pyproject_toml.html
-line-length = 100
-target-version = ['py311']
-include = '\.pyi?$'
-# Black only looks at python files, so we only need to exclude directories
-# that contain python files we don't want to touch, or directories that are
-# so huge we don't want to even scan them.
-exclude = '''  # exclude paths that match this regex
-  (
-    /\.            |  # files/dirs that start with a literal dot
-    /__pycache__/  |  # pycache directories are large and never interesting
-    /migrations/      # generated migrations
-  )
-'''
+[tool.ruff.lint.isort]
+known-first-party = ["jmullan.git_changelog"]
+known-local-folder = ["src"]
+section-order = ["future", "standard-library", "third-party", "internal", "first-party", "local-folder"]
+
+[tool.ruff.lint.isort.sections]
+internal = ["jmullan"]
+
+[tool.ruff.format]
+docstring-code-format = true
+docstring-code-line-length = 80

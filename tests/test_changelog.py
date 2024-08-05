@@ -1,4 +1,5 @@
-from dataclasses import fields, MISSING
+import io
+from dataclasses import MISSING, fields
 
 from jmullan.git_changelog import changelog
 
@@ -12,7 +13,7 @@ def test_include_line():
         None,
         "* commit to ignore",
         "git-p4",
-        "Merge branch 'CONTIN-5792-refactor-backfill'",
+        "Merge branch 'TICKET-5792-refactor-backfill'",
     ]
     for line in not_includes:
         assert not changelog.include_line(line)
@@ -22,10 +23,10 @@ def test_format_jira():
     expectations = {
         "* FOOBAR-1637 last": "* FOOBAR-1637 : last",
         "* BAZZ-2733 :     ": "* BAZZ-2733",
-        "* PIRATE-6206 - New ": "* PIRATE-6206 : New ",
-        "* PIRATE-6206- New ": "* PIRATE-6206 : New ",
-        "* PIRATE-6206 -New ": "* PIRATE-6206 : New ",
-        "* PIRATE-6206-New ": "* PIRATE-6206 : New ",
+        "* PIRATE-6206 - New ": "* PIRATE-6206 : New",
+        "* PIRATE-6206- New ": "* PIRATE-6206 : New",
+        "* PIRATE-6206 -New ": "* PIRATE-6206 : New",
+        "* PIRATE-6206-New ": "* PIRATE-6206 : New",
         "* LEAF-5410, LEAF-5316 :   More tests": "* LEAF-5316, LEAF-5410 : More tests",
         "* A-5316, B-5316 : sorting": "* A-5316, B-5316 : sorting",
         "* B-5316, A-5316 : sorting": "* A-5316, B-5316 : sorting",
@@ -50,7 +51,7 @@ def make_commit_data(data) -> dict[str, str | None]:
 def test_extract_refs():
     commit_data = make_commit_data({"sha": "abcd", "body": ""})
     refs = changelog.extract_refs(changelog.Commit(**commit_data))
-    assert {"abcd": []} == refs
+    assert refs == {"abcd": []}
 
 
 def test_extract_refs2():
@@ -58,12 +59,12 @@ def test_extract_refs2():
         {
             "sha": "abcd",
             "parents": "aaaa bbbb",
-            "refnames": [],
+            "refnames": "",
             "body": "Pull request #21: anything",
         }
     )
     refs = changelog.extract_refs(changelog.Commit(**commit_data))
-    assert {"abcd": []} == refs
+    assert refs == {"abcd": []}
 
 
 def test_extract_refs3():
@@ -71,12 +72,12 @@ def test_extract_refs3():
         {
             "sha": "abcd",
             "parents": "aaaa bbbb",
-            "refnames": [],
+            "refnames": "",
             "body": "Merge branch 'feature/branch_name'",
         }
     )
     refs = changelog.extract_refs(changelog.Commit(**commit_data))
-    assert {"abcd": []} == refs
+    assert refs == {"abcd": []}
 
 
 def test_extract_refs4():
@@ -84,13 +85,12 @@ def test_extract_refs4():
         {
             "sha": "abcd",
             "parents": "aaaa bbbb",
-            "refnames": [],
+            "refnames": "",
             "body": "Merge pull request #1 in anything from branch_name to main",
         }
     )
     refs = changelog.extract_refs(changelog.Commit(**commit_data))
-    print(refs)
-    assert {"abcd": [], "bbbb": ["branch_name"], "aaaa": ["main"]} == refs
+    assert refs == {"abcd": [], "bbbb": ["branch_name"], "aaaa": ["main"]}
 
 
 def test_make_version_line():
@@ -98,7 +98,7 @@ def test_make_version_line():
         {
             "sha": "abcd",
             "parents": "aaaa bbbb",
-            "refnames": [],
+            "refnames": "",
             "body": "Merge branch 'feature/branch_name'",
         }
     )
@@ -107,10 +107,60 @@ def test_make_version_line():
     assert "" == version_line
 
     version_line = changelog.make_version_line("v1234", [commit])
-    assert "## v1234" == version_line
+    assert version_line == "# v1234"
 
     version_line = changelog.make_version_line("1234", [commit])
-    assert "## v.1234" == version_line
+    assert version_line == "# v.1234"
 
     version_line = changelog.make_version_line("Current", [commit])
-    assert "## Current" == version_line
+    assert version_line == "# Current"
+
+
+def test_print_changelog():
+    with io.StringIO() as handle:
+        changelog.print_changelog(
+            None,
+            True,
+            "c97a2b73b2128c114eda9d310e91be3ccce6c18f",
+            True,
+            "Current",
+            False,
+            [],
+            handle,
+        )
+        content = handle.getvalue()
+    with open("tests/through_c97a2b73b2128c114eda9d310e91be3ccce6c18f.txt") as f:
+        expected = f.read()
+    assert content is not None
+    assert len(content)
+    assert content == expected
+    print(content)
+
+
+def chunk_from_file(filename: str):
+    print(f"pretending to run chunk_command but really loading from file {filename}")
+    with open(filename, "rb") as handle:
+        yield from changelog.stream_chunks(handle, "\x00")
+
+
+# @mock.patch("jmullan.git_changelog.changelog.chunk_command")
+# def test_print_changelog_complex(mock_chunk_command):
+#     mock_chunk_command.side_effect = lambda *_: chunk_from_file("tests/big.bin")
+#     with io.StringIO() as handle:
+#         changelog.print_changelog(
+#             None,
+#             True,
+#             "c97a2b73b2128c114eda9d310e91be3ccce6c18f",
+#             True,
+#             "Current",
+#             False,
+#             [],
+#             handle,
+#         )
+#         content = handle.getvalue()
+#     with open("tests/big.txt") as f:
+#         expected = f.read()
+#     assert content is not None
+#     assert len(content)
+#     print(content)
+#     assert content == expected
