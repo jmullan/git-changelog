@@ -19,23 +19,6 @@ def test_include_line():
         assert not changelog.include_line(line)
 
 
-def test_format_jira():
-    expectations = {
-        "* FOOBAR-1637 last": "* FOOBAR-1637 : last",
-        "* BAZZ-2733 :     ": "* BAZZ-2733",
-        "* PIRATE-6206 - New ": "* PIRATE-6206 : New",
-        "* PIRATE-6206- New ": "* PIRATE-6206 : New",
-        "* PIRATE-6206 -New ": "* PIRATE-6206 : New",
-        "* PIRATE-6206-New ": "* PIRATE-6206 : New",
-        "* LEAF-5410, LEAF-5316 :   More tests": "* LEAF-5316, LEAF-5410 : More tests",
-        "* A-5316, B-5316 : sorting": "* A-5316, B-5316 : sorting",
-        "* B-5316, A-5316 : sorting": "* A-5316, B-5316 : sorting",
-        "* LEAF-5410 :   More, LEAF-5316 ,tests": "* LEAF-5316, LEAF-5410 : More,  ,tests",
-    }
-    for line, expected in expectations.items():
-        assert changelog.format_jira(line) == expected
-
-
 def make_commit_data(data) -> dict[str, str | None]:
     commit_template = {
         commit_field.name: None
@@ -135,6 +118,14 @@ def test_print_changelog():
     assert len(content)
     assert content == expected
     print(content)
+
+
+def test_format_body():
+    assert changelog.format_body("", []) == []
+    assert changelog.format_body("body", []) == ["body"]
+    assert changelog.format_body("body\nody", []) == ["body", "ody"]
+    assert changelog.format_body("body\nody", ["ABC-123"]) == ["body", "ody"]
+    assert changelog.format_body("body\nABC-123: ody", ["ABC-123"]) == ["body", "ody"]
 
 
 def chunk_from_file(filename: str):

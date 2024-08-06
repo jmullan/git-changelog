@@ -46,11 +46,24 @@ _delete_regexes = [
     r"^(-* *)*",
     r"^feature/",
     r"^bugfix/",
+    r"commit\s*[a-f0-9]+\s*\[formerly\s*[a-f0-9]+\]\s*:?",
+    r"Former-commit-id:.*",
+    r"^WIP",
+    r"\s*WIP$",
+    r"^\s*merged\s*$",
+    r"^\s*merged master\s*$",
+    r"^\s*merged main\s*$",
+    r"^\s*Writing version .* to release.properties\s*$",
+    r"^\[\]\s*",
+    r"^\[Gradle Release Plugin\] - creating tag:\s*'.*'\.",
 ]
 
 INVALID_NAMES = {"jenkins", "mobileautomation"}
 
 EMAILS_TO_NAMES = {}  # type: dict[str, str]
+
+DEFAULT_WIDTH = 100
+LIST_DOT = "* "
 
 
 def none_as_empty(string: str | None) -> str:
@@ -168,8 +181,9 @@ class Commit:
     @property
     def description(self) -> str:
         body = none_as_empty_stripped(self.body)
-        if "\n" in body:
-            return self.body.split("\n", 1)[1]
+        body_parts = body.split("\n", 1)
+        if len(body_parts) > 1:
+            return body_parts[1]
         else:
             return ""
 
@@ -240,25 +254,6 @@ def include_line(line: str | None) -> bool:
     )
 
 
-def format_for_tag_only(commit: Commit) -> str:
-    line = none_as_empty_stripped(commit.subject)
-    line = delete_junk(line)
-    for x in _ignores:
-        line = line.replace(x, " ")
-    for x in _ignore_matches:
-        line = re.sub(x, " ", line)
-    tags = commit.tag_names or []
-    tags.sort(key=len, reverse=True)
-    for tag in commit.tag_names or []:
-        line = line.replace(tag, "")
-    if not re.match(r"\w", line):
-        line = ""
-    line = re.sub(r"\s+", " ", line)
-    line = line.strip()
-    line = add_jiras(line, commit.jiras)
-    return line
-
-
 def delete_junk(line: str) -> str:
     for regex in _delete_regexes:
         line = re.sub(regex, "", line, flags=re.IGNORECASE)
@@ -268,25 +263,7 @@ def delete_junk(line: str) -> str:
 def add_star(line: str | None) -> str:
     line = none_as_empty_stripped(line)
     if line:
-        return "* %s" % line
-    return line
-
-
-def format_jira(maybe_line: str | None) -> str:
-    maybe_line = none_as_empty_stripped(maybe_line)
-    if is_empty(maybe_line):
-        return ""
-    line: str = maybe_line
-    jiras = extract_jiras(line)
-    if jiras:
-        for jira in jiras:
-            line = line.replace(jira, "")
-        line = re.sub(r"^\W+", "", line)
-        joined = ", ".join(sorted(jiras))
-        if len(line):
-            line = f"* {joined} : {line}"
-        else:
-            line = f"* {joined}"
+        return textwrap.fill(line, initial_indent=LIST_DOT, subsequent_indent="  ")
     return line
 
 
@@ -296,30 +273,14 @@ def extract_jiras(body: str | None) -> list[str]:
     return list(set(re.findall("[A-Z]+-[0-9]+", body) or []))
 
 
-def add_jiras(line: str, jiras: list[str]) -> str:
+def strip_jiras(line: str, jiras: list[str]) -> str:
     line = none_as_empty_stripped(line)
     if is_empty(line):
         return ""
-    has_jiras = extract_jiras(line)
-    if has_jiras:
-        return line
-    missing_jiras = list(set([jira for jira in jiras if jira not in line]))
-    if missing_jiras:
-        joined = ", ".join(missing_jiras)
-        line = f"{joined} : {line}"
+    for jira in jiras:
+        escaped = re.escape(jira)
+        line = re.sub(rf"{escaped}\s*[-/:]*", "", line)
     return line
-
-
-def unique(items: list | None) -> list:
-    if items is None:
-        return []
-    seen = set()
-    output = []
-    for item in items or []:
-        if item not in seen:
-            output.append(item)
-            seen.add(item)
-    return output
 
 
 def format_tag_names(tags: list[str] | None) -> str:
@@ -365,18 +326,18 @@ def tags_to_release_version(tags: list[str], found_version) -> str | None:
     return None
 
 
-def format_body(body: str | None, jiras: list[str]) -> str | None:
+def format_body(body: str | None, jiras: list[str]) -> list[str]:
     body = none_as_empty(body)
     if is_empty(body):
-        return None
+        return []
     lines = body.rstrip().split("\n")
     lines = [line for line in lines if include_line(line)]
     lines = [delete_junk(line) for line in lines]
-    lines = [add_jiras(line, jiras) for line in lines]
-    lines = [add_star(line) for line in lines]
-    lines = [format_jira(line) for line in lines]
+    lines = [strip_jiras(line, jiras) for line in lines]
+    lines = [delete_junk(line) for line in lines]
+    # lines = [add_star(line) for line in lines]
     lines = [line for line in lines if line]
-    return "\n".join(lines)
+    return lines
 
 
 def valid_name(name: str | None) -> bool:
@@ -449,15 +410,18 @@ def format_commit(commit: Commit) -> list[str]:
     subject = commit.subject
     if not include_line(subject):
         return []
-
     commit_lines = []
-    subject_line = format_body(subject, commit.jiras)
-    if subject_line:
-        commit_lines.append(subject_line)
-    body = format_body(commit.body, commit.jiras)
-    if body:
-        commit_lines.append(body)
-    return "\n".join(commit_lines).split("\n")
+    subject_lines = format_body(subject, commit.jiras)
+    if subject_lines:
+        commit_lines.extend(subject_lines)
+    description = commit.description
+    if not is_empty(description):
+        description_lines = format_body(description, commit.jiras)
+        if description_lines:
+            for description_line in description_lines:
+                if description_line not in commit_lines:
+                    commit_lines.append(description_line)
+    return commit_lines
 
 
 def format_annotated_tag(tag: Tag) -> str | None:
@@ -467,21 +431,77 @@ def format_annotated_tag(tag: Tag) -> str | None:
     if is_empty(ref_name):
         # this should never happen
         return None
-    subject = none_as_empty_stripped(tag.subject)
+    subject = none_as_empty_stripped(tag.subject).strip()
+    subject = delete_junk(subject)
     body = none_as_empty_stripped(tag.body).strip()
+    body = delete_junk(body)
     tag_parts = []
     if is_empty(subject):
         tag_parts.append(f"## Tag: `{ref_name}`")
     else:
         tag_parts.append(
             textwrap.fill(
-                f"## Tag: `{ref_name}` {subject}", 80, initial_indent="", subsequent_indent="    "
+                f"## Tag: `{ref_name}` {subject}",
+                DEFAULT_WIDTH,
+                initial_indent="",
+                subsequent_indent="    ",
             )
         )
     if not is_empty(body):
-        body = fill_text(body, 80, "    ")
+        body = fill_text(body, DEFAULT_WIDTH, "    ")
         tag_parts.append(body)
     return "\n".join(tag_parts).rstrip()
+
+
+def format_jira_commits(commits, jira_string) -> str:
+    lines = []
+    seen_commits = set()
+    for commit in commits:
+        commit_lines = format_commit(commit)
+        if commit_lines:
+            for commit_line in commit_lines:
+                unique_commit_lines = []
+                if commit_line not in seen_commits:
+                    seen_commits.add(commit_line)
+                    unique_commit_lines.append(commit_line)
+                lines.extend(unique_commit_lines)
+    body = "\n".join(lines).strip()
+
+    if is_empty(jira_string):
+        return textwrap.indent(body, " * ")
+    elif "\n" not in body:
+        return textwrap.fill(
+            body.removeprefix(LIST_DOT),
+            DEFAULT_WIDTH,
+            initial_indent=f"\n{jira_string}: ",
+            subsequent_indent="    ",
+        )
+    else:
+        body = textwrap.indent(body, " * ")
+        return f"\n{jira_string}:\n{body}"
+
+
+def format_month_commits(month_commits: list[Commit]):
+    month_commit_lines = []
+    jiras_by_jiras: dict[str, list[str]] = {}
+    commits_by_jiras: dict[str, list[Commit]] = {"": []}
+    for commit in month_commits:
+        jiras = commit.jiras
+        if not jiras:
+            jira_string = ""
+        else:
+            jira_string = ", ".join(
+                sorted(set(jira.strip() for jira in jiras if not is_empty(jira)))
+            )
+        if jira_string not in commits_by_jiras:
+            commits_by_jiras[jira_string] = []
+        jiras_by_jiras[jira_string] = jiras
+        commits_by_jiras[jira_string].append(commit)
+    for jira_string, commits in commits_by_jiras.items():
+        jira_commits_body = format_jira_commits(commits, jira_string)
+        if jira_commits_body:
+            month_commit_lines.extend(jira_commits_body.split("\n"))
+    return month_commit_lines
 
 
 def make_notes(version: Version, tags_by_tag_name: dict[str, Tag]) -> str:
@@ -508,7 +528,6 @@ def make_notes(version: Version, tags_by_tag_name: dict[str, Tag]) -> str:
 
     for formatted_tags, commits_by_month in months_by_tag.items():
         if not is_empty(formatted_tags):
-            tags_notes.append("")
             tag_names = tags_by_format[formatted_tags]
             tags = {
                 tag_name: tags_by_tag_name[tag_name]
@@ -517,6 +536,8 @@ def make_notes(version: Version, tags_by_tag_name: dict[str, Tag]) -> str:
             }
             annotated_tags = {tag_name: tag for tag_name, tag in tags.items() if tag.is_annotated()}
             for tag in annotated_tags.values():
+                if tag.ref_name != version.version_name:
+                    tags_notes.append("")
                 tag_note = format_annotated_tag(tag)
                 if tag_note is not None:
                     tags_notes.append(tag_note)
@@ -525,27 +546,25 @@ def make_notes(version: Version, tags_by_tag_name: dict[str, Tag]) -> str:
             remaining_tag_names = [
                 tag_name for tag_name in tag_names if tag_name not in annotated_tags
             ]
-            if remaining_tag_names:
+            if len(remaining_tag_names) > 0:
+                if not len(annotated_tags) > 0 and (
+                    len(remaining_tag_names) > 1 or remaining_tag_names[0] != version.version_name
+                ):
+                    tags_notes.append("")
                 reformatted = format_tag_names(remaining_tag_names)
                 tags_notes.append(reformatted)
         first_month_in_tag = True
         for month, month_commits in commits_by_month.items():
-            month_commit_lines = []
-            for commit in month_commits:
-                commit_lines = format_commit(commit)
-                if len(commit_lines):
-                    for commit_line in commit_lines:
-                        if commit_line not in tags_notes:
-                            month_commit_lines.append(commit_line)
-            month_commit_lines = unique(month_commit_lines)
-            if month_commit_lines:
-                if month not in version_line:
-                    if not first_month_in_tag:
-                        tags_notes.append("")
-                    tags_notes.append(f"### {month}")
-                formatted_names = format_names(month_commits)
-                if formatted_names is not None:
-                    tags_notes.append(formatted_names)
+            if month not in version_line:
+                if not first_month_in_tag:
+                    tags_notes.append("")
+                tags_notes.append(f"### {month}")
+            formatted_names = format_names(month_commits)
+            if not is_empty(formatted_names) and formatted_names is not None:
+                tags_notes.append(formatted_names)
+
+            month_commit_lines = format_month_commits(month_commits)
+            if len(month_commit_lines):
                 tags_notes.extend(month_commit_lines)
             first_month_in_tag = False
     if tags_notes:
@@ -586,32 +605,6 @@ def extract_refs(commit: Commit) -> dict[str, list[str]]:
                 shas_to_refs[left] = []
             shas_to_refs[left].append(to_ref)
     return shas_to_refs
-
-
-def print_tree(commits_by_sha: dict[str, Commit], refs_by_sha: dict[str, list[str]]):
-    if not commits_by_sha:
-        return
-    head = list(commits_by_sha.keys())[0]
-    current_branches = [head]
-    seen = set()
-    while current_branches:
-        new_current_branches = []
-        line = []
-        for head in current_branches:
-            if head in seen:
-                continue
-            seen.add(head)
-            commit = commits_by_sha.get(head)
-            if commit is not None:
-                refs = refs_by_sha.get(head) or []
-                node = ",".join(refs) or head[:8]
-                line.append(node)
-                new_current_branches.extend(commit.parent_shas or [])
-        current_branches = sorted(
-            new_current_branches,
-            key=lambda sha: commits_by_sha.get(sha, Commit.empty()).date,
-        )
-        print(" ".join(line))
 
 
 def stream_chunks(io: IO[bytes] | None, separator: str = "\n") -> Iterator[str]:
