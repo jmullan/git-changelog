@@ -1,5 +1,8 @@
 #!/usr/bin/env python3.11
+import csv
+import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -63,7 +66,7 @@ INVALID_NAMES = {"jenkins", "mobileautomation"}
 EMAILS_TO_NAMES = {}  # type: dict[str, str]
 
 DEFAULT_WIDTH = 100
-LIST_DOT = "* "
+LIST_PREFIX = "- "
 
 
 def none_as_empty(string: str | None) -> str:
@@ -80,6 +83,20 @@ def is_empty(string: str | None) -> bool:
     if string is None:
         return True
     return len(string.strip()) == 0
+
+
+def load_jiras() -> dict[str, str]:
+    if os.path.exists(".jiras.csv"):
+        with open(".jiras.csv", "r", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            return {k: v for k, v in reader}
+    jiras_file_path = os.environ.get("JIRA_PATH")
+    if jiras_file_path is not None and os.path.exists(jiras_file_path):
+        with open(jiras_file_path, "r", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            return {k: v for k, v in reader}
+    return {}
+
 
 
 @dataclass
@@ -263,7 +280,7 @@ def delete_junk(line: str) -> str:
 def add_star(line: str | None) -> str:
     line = none_as_empty_stripped(line)
     if line:
-        return textwrap.fill(line, initial_indent=LIST_DOT, subsequent_indent="  ")
+        return textwrap.fill(line, initial_indent=LIST_PREFIX, subsequent_indent="  ")
     return line
 
 
@@ -340,6 +357,7 @@ def format_body(body: str | None, jiras: list[str]) -> list[str]:
     return lines
 
 
+
 def valid_name(name: str | None) -> bool:
     name = none_as_empty_stripped(name)
     if is_empty(name):
@@ -393,17 +411,24 @@ def make_version_line(release_version: str, commits: list[Commit]) -> str:
     return ""
 
 
-def fill_text(text: str, width: int, indent: str):
+def fill_text(text: str, width: int, indent: str, initial_indent: str | None = None):
     """Strip any extra indentation, then reindent and then wrap each line individually."""
     text = textwrap.dedent(text)
     text = "\n".join(x.rstrip() for x in text.split("\n"))
     text = text.strip("\n")
     text = re.sub(r"\n\n\n+", "\n\n", text)
     texts = text.splitlines()
-    texts = [textwrap.fill(line, width) for line in texts]  # Wrap each line
-    text = "\n".join(texts)
-    text = textwrap.indent(text, indent)
-    return text
+    if indent is not None and initial_indent is not None:
+        texts = [textwrap.fill(line, width, initial_indent=initial_indent, subsequent_indent=indent) for line in texts]  # Wrap each line
+        return "\n".join(texts)
+    elif indent is not None:
+        texts = [textwrap.fill(line, width, initial_indent=indent, subsequent_indent=indent) for line in texts]  # Wrap each line
+        return "\n".join(texts)
+    elif initial_indent is not None:
+        texts = [textwrap.fill(line, width, initial_indent=initial_indent) for line in texts]  # Wrap each line
+        return "\n".join(texts)
+    else:
+        return text
 
 
 def format_commit(commit: Commit) -> list[str]:
@@ -453,7 +478,7 @@ def format_annotated_tag(tag: Tag) -> str | None:
     return "\n".join(tag_parts).rstrip()
 
 
-def format_jira_commits(commits, jira_string) -> str:
+def format_jira_commits(commits, jira_string, jiras_to_summaries: dict[str, str]) -> str:
     lines = []
     seen_commits = set()
     for commit in commits:
@@ -469,42 +494,105 @@ def format_jira_commits(commits, jira_string) -> str:
 
     if is_empty(jira_string):
         return textwrap.indent(body, " * ")
-    elif "\n" not in body:
-        return textwrap.fill(
-            body.removeprefix(LIST_DOT),
-            DEFAULT_WIDTH,
-            initial_indent=f"\n{jira_string}: ",
-            subsequent_indent="    ",
-        )
+
+    jiras = [jira.strip() for jira in jira_string.split(",")]
+    summary_string = ""
+    if len(jiras) > 0:
+        jiras_with_summaries = [
+            f"{jira}: {jiras_to_summaries[jira]}"
+            for jira in jiras
+            if jiras_to_summaries.get(jira)
+        ]
+        jiras_without_summaries = [
+            jira for jira in jiras if jira not in jiras_to_summaries
+        ]
+        if len(jiras_with_summaries) > 0:
+            summary_string = "\n".join(jiras_with_summaries)
+            if jiras_without_summaries:
+                jira_string = ", ".join(jiras_without_summaries)
+            else:
+                jira_string = ""
+    if len(jira_string):
+        jira_string = f"{jira_string}:"
+    if len(jira_string):
+        if len(summary_string) and len(body):
+            summary_string = fill_text(
+                f"\n{jira_string} {summary_string}",
+                DEFAULT_WIDTH,
+                ""
+            )
+            return f"{summary_string}\n{body}"
+        elif len(summary_string):
+            return fill_text(
+                f"\n{jira_string} {summary_string}",
+                DEFAULT_WIDTH,
+                ""
+            )
+        elif "\n" not in body:
+            return textwrap.fill(
+                body,
+                DEFAULT_WIDTH,
+                initial_indent=f"\n{jira_string} ",
+                subsequent_indent="    ",
+            )
+        else:
+            body = textwrap.indent(body, " * ")
+            return f"\n{jira_string}\n{body}"
     else:
-        body = textwrap.indent(body, " * ")
-        return f"\n{jira_string}:\n{body}"
+        if len(summary_string) and len(body):
+            summary_string = fill_text(
+                f"{summary_string}",
+                DEFAULT_WIDTH,
+                "    ",
+                initial_indent=""
+            )
+            body = fill_text(
+                f"{body}",
+                DEFAULT_WIDTH,
+                " * "
+            )
+            return f"{summary_string}\n{body}"
+        elif len(summary_string):
+            return fill_text(
+                f"{summary_string}",
+                DEFAULT_WIDTH,
+                "    ",
+                initial_indent=""
+            )
+        elif "\n" not in body:
+            return textwrap.fill(
+                body.removeprefix(LIST_PREFIX),
+                DEFAULT_WIDTH,
+                initial_indent=f"",
+                subsequent_indent="    ",
+            )
+        else:
+            body = textwrap.indent(body, f" {LIST_PREFIX}")
+            return f"{body}"
 
 
-def format_month_commits(month_commits: list[Commit]):
+def format_month_commits(month_commits: list[Commit], jiras_to_summaries: dict[str, str]):
     month_commit_lines = []
-    jiras_by_jiras: dict[str, list[str]] = {}
+    jiras_by_jiras: dict[str, set[str]] = {}
     commits_by_jiras: dict[str, list[Commit]] = {"": []}
     for commit in month_commits:
-        jiras = commit.jiras
+        jiras = commit.jiras or []
+        unique_jiras = set(jira.strip() for jira in jiras if not is_empty(jira))
         if not jiras:
             jira_string = ""
         else:
-            jira_string = ", ".join(
-                sorted(set(jira.strip() for jira in jiras if not is_empty(jira)))
-            )
+            jira_string = ", ".join(sorted(unique_jiras))
         if jira_string not in commits_by_jiras:
             commits_by_jiras[jira_string] = []
-        jiras_by_jiras[jira_string] = jiras
         commits_by_jiras[jira_string].append(commit)
     for jira_string, commits in commits_by_jiras.items():
-        jira_commits_body = format_jira_commits(commits, jira_string)
+        jira_commits_body = format_jira_commits(commits, jira_string, jiras_to_summaries)
         if jira_commits_body:
             month_commit_lines.extend(jira_commits_body.split("\n"))
     return month_commit_lines
 
 
-def make_notes(version: Version, tags_by_tag_name: dict[str, Tag]) -> str:
+def make_notes(version: Version, tags_by_tag_name: dict[str, Tag], jiras_to_summaries: dict[str, str]) -> str:
     version_line = make_version_line(version.version_name, version.commits)
     release_note = []
     if version_line is not None and len(version_line):
@@ -563,7 +651,7 @@ def make_notes(version: Version, tags_by_tag_name: dict[str, Tag]) -> str:
             if not is_empty(formatted_names) and formatted_names is not None:
                 tags_notes.append(formatted_names)
 
-            month_commit_lines = format_month_commits(month_commits)
+            month_commit_lines = format_month_commits(month_commits, jiras_to_summaries)
             if len(month_commit_lines):
                 tags_notes.extend(month_commit_lines)
             first_month_in_tag = False
@@ -762,6 +850,7 @@ def print_changelog(
     if out is None:
         out = sys.stdout
     tags_by_tag_name = git_tags()
+    jiras_to_summaries = load_jiras()
     commits_by_sha = git_commits_by_sha(from_sha, from_inclusive, to_sha, to_inclusive, files=files)
 
     shas_to_refs = {}  # type: dict[str, list[str]]
@@ -861,7 +950,7 @@ def print_changelog(
     for group_version in versions:
         if not group_version.commits:
             continue
-        notes = make_notes(group_version, tags_by_tag_name)
+        notes = make_notes(group_version, tags_by_tag_name, jiras_to_summaries)
         if notes:
             changes.append(notes)
     if changes:
