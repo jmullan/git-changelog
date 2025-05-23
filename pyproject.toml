@@ -13,8 +13,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 keywords = ["git"]
 dependencies = [
-    "jmullan_logging@git+http://github.com/jmullan/jmullan_logging",
-    "jmullan_cmd@git+http://github.com/jmullan/jmullan_cmd"
+    "jmullan_logging@git+https://github.com/jmullan/jmullan_logging",
+    "jmullan_cmd@git+https://github.com/jmullan/jmullan_cmd"
 ]
 
 [project.optional-dependencies]
