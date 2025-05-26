@@ -1,8 +1,8 @@
 #!/usr/bin/env python3.11
 import logging
 
-from jmullan_cmd import cmd
-from jmullan_logging import easy_logging
+from jmullan.cmd import cmd
+from jmullan.logging import easy_logging
 
 from jmullan.git_changelog.changelog import print_changelog
 

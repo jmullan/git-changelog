@@ -7,8 +7,8 @@ import re
 import sys
 from typing import Any, TextIO
 
-from jmullan_cmd import cmd
-from jmullan_logging import easy_logging
+from jmullan.cmd import cmd
+from jmullan.logging import easy_logging
 
 from jmullan.git_changelog import changelog
 
