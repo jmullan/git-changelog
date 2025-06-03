@@ -1,5 +1,6 @@
 #!/usr/bin/env python3.11
 import logging
+import sys
 
 from jmullan.cmd import cmd
 from jmullan.logging import easy_logging
@@ -49,13 +50,17 @@ class ChangeLogMain(cmd.Main):
         )
         self.parser.add_argument("version", default="Current", nargs="?")
 
+    def setup(self):
+        super().setup()
+        if self.args.verbose:
+            easy_logging.easy_initialize_logging("DEBUG", stream=sys.stderr)
+        elif self.args.quiet:
+            easy_logging.easy_initialize_logging("WARNING", stream=sys.stderr)
+        else:
+            easy_logging.easy_initialize_logging("INFO", stream=sys.stderr)
+
     def main(self):
         super().main()
-        if self.args.verbose:
-            easy_logging.easy_initialize_logging("DEBUG")
-        else:
-            easy_logging.easy_initialize_logging()
-        logger.debug(self.args)
         files = self.args.files or []
 
         from_sha = self.args.after or self.args.since
