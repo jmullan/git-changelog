@@ -136,7 +136,9 @@ class Commit:
     sha: str = field(metadata={"template": "%H"})
     date: str = field(metadata={"template": "%as"})
     email: str = field(metadata={"template": "%aE"})
+    original_email: str = field(metadata={"template": "%ae"})
     name: str = field(metadata={"template": "%aN"})
+    original_name: str = field(metadata={"template": "%an"})
     refnames: str = field(metadata={"template": "%D"})
     parents: str = field(metadata={"template": "%P"})
     body: str = field(
@@ -244,6 +246,23 @@ class Commit:
         if date is not None:
             return date[:7]
         return ""
+
+    def is_likely_bot(self):
+        bots = ["dependabot", "sourcegraph.com", "githubactions-noreply"]
+        name_fields = {
+            f.lower()
+            for f in [
+                self.original_email,
+                self.original_name,
+                self.email,
+                self.name
+            ]
+        }
+        for bot in bots:
+            for name_field in name_fields:
+                if bot in name_field:
+                    return True
+        return False
 
 
 @dataclass
@@ -465,6 +484,10 @@ def format_commit(commit: Commit) -> list[str]:
             for description_line in description_lines:
                 if description_line not in commit_lines:
                     commit_lines.append(description_line)
+    if commit.is_likely_bot():
+        if commit_lines:
+            commit_line = commit_lines[0]
+            return [f"(bot) {commit_line}"]
     return commit_lines
 
 
@@ -540,10 +563,10 @@ def format_jira_commits(commits, jira_string, jiras_to_summaries: dict[str, str]
         list_prefix = LIST_PREFIX
     if len(jira_string):
         if len(summary_string) and len(body):
-            summary_string = fill_text(f"{jira_string} {summary_string}", DEFAULT_WIDTH, "")
+            summary_string = fill_text(f"{jira_string} {summary_string}", DEFAULT_WIDTH, "    ")
             return f"{summary_string}\n\n{body}"
         elif len(summary_string):
-            return fill_text(f"{jira_string} {summary_string}", DEFAULT_WIDTH, "")
+            return fill_text(f"{jira_string} {summary_string}", DEFAULT_WIDTH, "    ")
         elif len(body):
             if "\n" not in body:
                 return textwrap.fill(
@@ -735,7 +758,7 @@ def git_log(
     reversed: bool | None = None,
     files: list[str] | None = None,
 ) -> Iterator[str]:
-    command = ["git", "log", "-z", f"--format={git_format}"]
+    command = ["git", "log", "--all", "-z", f"--format={git_format}"]
     if to_inclusive:
         to_caret = ""
     else:
