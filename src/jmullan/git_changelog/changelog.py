@@ -889,14 +889,14 @@ def get_tag_tree(
         retained = set(heritage)
         for item in heritage:
             retained = retained - set(ancestors[item])
-        ancestors[sha] = retained
+        ancestors[sha] = list(retained)
 
     return {x: list(y) for x, y in ancestors.items()}
 
 
 def order_tags(tag_tree: dict[str, list[str]], commits_by_sha: dict[str, Commit]) -> list[str]:
     ordered_tags = []
-    seen_tag_shas = set()
+    seen_tag_shas: set[str] = set()
     tags_to_check = list(tag_tree.keys())
     while len(tags_to_check):
         leaves = []
