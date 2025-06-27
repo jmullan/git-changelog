@@ -5,7 +5,7 @@ name: Python package
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "*" ]
   pull_request:
     branches: [ "main" ]
 
@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11"]
+        python-version: ["3.13"]
 
     steps:
     - uses: actions/checkout@main
@@ -25,14 +25,11 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        python -m pip install '.[dev]'
+        python -m pip install --upgrade pip uv
+        uv pip install -e '.[dev]'
     - name: Lint
       run: |
-        black --check .
-        isort --check src tests
-        ruff check
-        mypy src tests
+        pre-commit run --all-files
     - name: Run Tests
       run: |
         pytest

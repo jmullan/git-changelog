@@ -10,7 +10,7 @@ classifiers = [
     "Intended Audience :: Developers"
 ]
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 keywords = ["git"]
 dependencies = [
     "jmullan.logging@git+https://github.com/jmullan/jmullan.logging",
@@ -45,7 +45,7 @@ build-backend = "hatchling.build"
 [tool.mypy]
 namespace_packages = "true"
 mypy_path = "src"
-python_version = "3.11"
+python_version = "3.13"
 ignore_missing_imports = true
 enable_error_code = [
     "ignore-without-code"
