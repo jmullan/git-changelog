@@ -14,7 +14,8 @@ requires-python = ">=3.11"
 keywords = ["git"]
 dependencies = [
     "jmullan.logging@git+https://github.com/jmullan/jmullan.logging",
-    "jmullan.cmd@git+https://github.com/jmullan/jmullan.cmd"
+    "jmullan.cmd@git+https://github.com/jmullan/jmullan.cmd",
+    "rich"
 ]
 
 [project.optional-dependencies]

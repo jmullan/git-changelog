@@ -86,10 +86,6 @@ def is_empty(string: str | None) -> bool:
 
 
 def load_jiras() -> dict[str, str]:
-    if os.path.exists(".jiras.csv"):
-        with open(".jiras.csv", encoding="utf-8") as handle:
-            reader = csv.reader(handle)
-            return {k: v for k, v in reader}
     jiras_file_path = os.environ.get("JIRA_PATH")
     jiras = dict()
     if jiras_file_path is not None and os.path.exists(jiras_file_path):
@@ -141,9 +137,8 @@ class Commit:
     original_name: str = field(metadata={"template": "%an"})
     refnames: str = field(metadata={"template": "%D"})
     parents: str = field(metadata={"template": "%P"})
-    body: str = field(
-        metadata={"template": "%B"}
-    )  # body must be last since it can have multiple lines
+    body: str = field(metadata={"template": "%B"})
+    notes: str = field(metadata={"template": "%N"})
 
     additional_jiras: list[str] = field(default_factory=list)
     likely_jiras: list[str] = field(default_factory=list)
@@ -250,13 +245,7 @@ class Commit:
     def is_likely_bot(self):
         bots = ["dependabot", "sourcegraph.com", "githubactions-noreply"]
         name_fields = {
-            f.lower()
-            for f in [
-                self.original_email,
-                self.original_name,
-                self.email,
-                self.name
-            ]
+            f.lower() for f in [self.original_email, self.original_name, self.email, self.name]
         }
         for bot in bots:
             for name_field in name_fields:
@@ -288,7 +277,7 @@ GIT_TAG_FORMAT = (
 )
 
 GIT_COMMIT_FORMAT = "\n".join(
-    f"{commit_field.name} {commit_field.metadata['template']}"
+    f"%h {commit_field.name} {commit_field.metadata['template']}"
     for commit_field in fields(Commit)
     if commit_field.metadata.get("template") is not None
 )
@@ -847,17 +836,78 @@ def chunk_to_tag(chunk: str) -> Tag | None:
 def chunk_to_commit(chunk: str) -> Commit | None:
     if chunk is None:
         return None
-    if "\nbody" not in chunk:
+    abbreviated_sha = chunk.split(" ", 1)[0]
+    field_pieces = chunk.removeprefix(f"{abbreviated_sha} ").split(f"\n{abbreviated_sha} ")
+    commit_data = {
+        p[0]: p[1] for p in [piece.split(" ", 1) for piece in field_pieces] if len(p) > 1
+    }
+    if "body" not in commit_data:
         logger.debug("body not in commit %r", chunk)
         return None
-    header, body = chunk.split("\nbody", 1)
-    commit_data = {"body": body.removeprefix(" ").rstrip()}
-    commit_data.update(extract_header_fields(header))
+
     if not commit_data.get("sha"):
         logger.debug("No sha in commit %s", chunk)
         return None
+    try:
+        return Commit(**commit_data)  # type: ignore[arg-type]
+    except TypeError:
+        print(chunk, commit_data)
+        raise
 
-    return Commit(**commit_data)  # type: ignore[arg-type]
+
+def all_ancestors(sha: str, commits_by_sha: dict[str, Commit]) -> set[str]:
+    stack: list[str] = [sha]
+    found = set()
+    while len(stack):
+        sha = stack.pop()
+        if sha in found:
+            continue
+        found.add(sha)
+        commit = commits_by_sha.get(sha)
+        if commit is None:
+            continue
+        parents = commit.parent_shas
+        if not parents:
+            continue
+        for parent in parents:
+            if parent == sha or parent in found:
+                continue
+            stack.append(parent)
+    return found
+
+
+def get_tag_tree(
+    tags_by_sha: dict[str, Tag], commits_by_sha: dict[str, Commit]
+) -> dict[str, list[str]]:
+    ancestors: dict[str, list[str]] = {}
+    for sha, tag in tags_by_sha.items():
+        ancestors[sha] = [
+            a for a in all_ancestors(sha, commits_by_sha) if a in tags_by_sha and a != sha
+        ]
+    for sha, heritage in ancestors.items():
+        # remove anything also included in parent heritages
+        retained = set(heritage)
+        for item in heritage:
+            retained = retained - set(ancestors[item])
+        ancestors[sha] = retained
+
+    return {x: list(y) for x, y in ancestors.items()}
+
+
+def order_tags(tag_tree: dict[str, list[str]], commits_by_sha: dict[str, Commit]) -> list[str]:
+    ordered_tags = []
+    seen_tag_shas = set()
+    tags_to_check = list(tag_tree.keys())
+    while len(tags_to_check):
+        leaves = []
+        for sha in tags_to_check:
+            if not set(tag_tree[sha]) - seen_tag_shas:
+                leaves.append(sha)
+        for leaf in leaves:
+            tags_to_check.remove(leaf)
+            seen_tag_shas.add(leaf)
+        ordered_tags.extend(sorted(leaves, key=lambda sha: commits_by_sha[sha].date))
+    return ordered_tags
 
 
 def print_changelog(
@@ -876,8 +926,8 @@ def print_changelog(
     jiras_to_summaries = load_jiras()
     commits_by_sha = git_commits_by_sha(from_sha, from_inclusive, to_sha, to_inclusive, files=files)
 
-    shas_to_refs = {}  # type: dict[str, list[str]]
-    child_shas = {}  # type: dict[str, list[str]]
+    shas_to_refs: dict[str, list[str]] = {}
+    child_shas: dict[str, list[str]] = {}
     for sha, commit in commits_by_sha.items():
         if sha not in child_shas:
             child_shas[sha] = []
@@ -918,8 +968,6 @@ def print_changelog(
                     shas_to_refs[parent_sha] = refs
         shas_to_refs[sha] = refs
 
-    # print_tree(commits_by_sha, shas_to_refs)
-
     for sha, commit in commits_by_sha.items():
         parent_shas = commit.parent_shas or []
         if commit.is_merge_to_main and len(parent_shas) in (1, 2):
@@ -944,20 +992,32 @@ def print_changelog(
 
     version_tree: dict[str, list[Commit]] = {}
 
-    group_name = version or "Unknown"
-
     use_tags = use_tags or False
+    tags_by_sha = {tag.sha: tag for tag in tags_by_tag_name.values()}
+    if use_tags:
+        tag_tree = get_tag_tree(tags_by_sha, commits_by_sha)
+        ordered_tags = order_tags(tag_tree, commits_by_sha)
+    else:
+        ordered_tags = []
+
     found_version = False
     for sha, commit in commits_by_sha.items():
-        commit_tags = commit.tag_names
+        group_name = version or "Unknown"
         if commit.version:
             group_name = commit.version
             found_version = True
-        elif use_tags and commit_tags:
-            candidate_version = tags_to_release_version(commit_tags, found_version)
-            if candidate_version:
-                group_name = candidate_version
-
+        elif use_tags:
+            commit_tags = commit.tag_names
+            if not commit_tags:
+                for possible_tag_sha in ordered_tags:
+                    if sha in all_ancestors(possible_tag_sha, commits_by_sha):
+                        tag = tags_by_sha[possible_tag_sha]
+                        commit_tags = [tag.ref_name]
+                        break
+            if commit_tags:
+                candidate_version = tags_to_release_version(commit_tags, found_version)
+                if candidate_version:
+                    group_name = candidate_version
         if group_name not in version_tree:
             version_tree[group_name] = []
         version_tree[group_name].append(commit)

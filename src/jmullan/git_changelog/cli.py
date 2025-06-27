@@ -38,11 +38,10 @@ class ChangeLogMain(cmd.Main):
             help="up to but not including this commit",
         )
         self.parser.add_argument(
-            "-t",
-            "--tags",
-            dest="tag_names",
-            action="store_true",
-            default=False,
+            "--no-use-tags",
+            dest="use_tag_names",
+            action="store_false",
+            default=True,
             help="Use tags and other found versions",
         )
         self.parser.add_argument(
@@ -67,14 +66,13 @@ class ChangeLogMain(cmd.Main):
         from_inclusive = from_sha is None or self.args.since is not None
         to_sha = self.args.until or self.args.through
         to_inclusive = to_sha is None or self.args.through is not None
-
         print_changelog(
             from_sha,
             from_inclusive,
             to_sha,
             to_inclusive,
             self.args.version,
-            self.args.tag_names,
+            self.args.use_tag_names,
             files,
         )
 
