@@ -1,5 +1,9 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "git-changelog"
+name = "jmullan.git_changelog"
 version = "1.0.0"
 description = "Produce a CHANGELOG from your git log."
 authors = [
@@ -19,12 +23,23 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pre-commit",
-    "mypy",
-    "pip",
+all = ["jmullan.git_changelog[test,dev,build]"]
+test = [
+    "coverage[toml]",
     "pytest",
-    "ruff"
+    "pytest-cov",
+    "pytest-mock",
+]
+dev = [
+    "mdformat",
+    "mypy",
+    "pre-commit",
+    "ruff",
+]
+build = [
+    "hatch",
+    "pip",
+    "uv"
 ]
 
 [project.urls]
@@ -36,15 +51,41 @@ repository = "https://github.com/jmullan/git-changelog"
 git-changelog = "jmullan.git_changelog.cli:main"
 git-authors = "jmullan.git_changelog.authors:main"
 
-[build-system]
-requires = [
-    "hatchling"
+[tool.hatch.build.targets.wheel]
+packages = ["src/jmullan"]
+sources = ["src"]
+only-include = ["src/jmullan/git_changelog"]
+
+[tool.hatch.envs.types]
+extra-dependencies = [
+  "mypy>=1.0.0",
 ]
-build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+allow-implicit-namespace-packages = true
+
+[tool.coverage.run]
+source_pkgs = ["jmullan.cmd", "tests"]
+branch = true
+parallel = true
+omit = []
+
+[tool.coverage.paths]
+jmullan.chat = ["src/jmullan/cmd"]
+tests = ["tests", "*/jmullan/cmd/tests"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
 
 [tool.mypy]
-namespace_packages = "true"
-mypy_path = "src"
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "src:tests"
 python_version = "3.13"
 ignore_missing_imports = true
 enable_error_code = [
@@ -53,25 +94,49 @@ enable_error_code = [
 warn_return_any = true
 warn_unused_configs = true
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/jmullan"]
-
-[tool.hatch.metadata]
-allow-direct-references = true
-
 [tool.ruff]
-line-length = 100
+line-length = 120
 lint.select = [
-  "E",   # pycodestyle
-  "F",   # pyflakes
-  "UP",  # pyupgrade
-  # "D",   # pydocstyle
-  "I",   # isort
+    "ALL"
+]
+lint.ignore = [
+    "ANN002",  # Missing type annotation for `*args`
+    "ANN003",  # Missing type annotation for `**kwargs`
+    "ANN204", # Missing return type annotation for special method `__init__`
+    "BLE001",  # Do not catch blind exception: `Exception`
+    "COM812",  # missing-trailing-comma
+    "D104", # Missing docstring in public package
+    "D107", # Missing docstring in `__init__`
+    "D203",  # `incorrect-blank-line-before-class`
+    "D213",  # `multi-line-summary-second-line`
+    "EM101",  # Exception must not use a string literal, assign to variable first
+    "SIM108",  # Use ternary operator instead of `if`-`else`-block
+    "TRY003",  # Avoid specifying long messages outside the exception class
 ]
 
+# Only ignore variables named "_".
+lint.dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?)|args|kwargs)$"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "ANN",     # Missing type annotations
+    "ARG",     # Unused function args -> fixtures nevertheless are functionally relevant...
+    "D",       # Missing docstrings
+    "D103",    # Missing docstring in public function
+    "FBT",     # Don't care about booleans as positional arguments in tests, e.g. via @pytest.mark.parametrize()
+    "PLR2004", # Magic value used in comparison, ...
+    "S101",    # asserts allowed in tests...
+    "S311",    # Standard pseudo-random generators are not suitable for cryptographic purposes
+    "TRY002",  # Create your own exception
+    "TRY301",  # Abstract `raise` to an inner function
+]
+
+[tool.ruff.lint.flake8-annotations]
+# this is supposed to deal with ANN204 for __init__, but doesn't seem to work
+mypy-init-return = true
 
 [tool.ruff.lint.isort]
-known-first-party = ["jmullan.git_changelog"]
+known-first-party = ["jmullan.cmd"]
 known-local-folder = ["src"]
 section-order = ["future", "standard-library", "third-party", "internal", "first-party", "local-folder"]
 
@@ -81,3 +146,9 @@ internal = ["jmullan"]
 [tool.ruff.format]
 docstring-code-format = true
 docstring-code-line-length = 80
+quote-style = "double"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "--doctest-modules -p no:logging --import-mode=importlib"
+consider_namespace_packages = true

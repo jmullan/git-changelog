@@ -1,7 +1,9 @@
-# Current (2025-06-26)
+# Current (2025-06-27)
 
 Jesse Mullan
 
+- Bump to python 3.13
+- Fix tests and types
 - Be smarter about tag heritage and stuff
 - More bots, more logs
 - Redo logging configuration

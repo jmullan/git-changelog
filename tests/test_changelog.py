@@ -1,7 +1,12 @@
 import io
+import logging
 from dataclasses import MISSING, fields
+from pathlib import Path
 
 from jmullan.git_changelog import changelog
+from jmullan.git_changelog.changelog import Inclusiveness, ShaRange, UseTags
+
+logger = logging.getLogger(__name__)
 
 
 def test_include_line():
@@ -21,9 +26,7 @@ def test_include_line():
 
 def make_commit_data(data) -> dict[str, str | None]:
     commit_template = {
-        commit_field.name: None
-        for commit_field in fields(changelog.Commit)
-        if commit_field.default_factory is MISSING
+        commit_field.name: None for commit_field in fields(changelog.Commit) if commit_field.default_factory is MISSING
     }
     commit_data = {}  # type: dict[str, str | None]
     commit_data.update(commit_template)
@@ -87,7 +90,7 @@ def test_make_version_line():
     )
     commit = changelog.Commit(**commit_data)
     version_line = changelog.make_version_line("", [commit])
-    assert "" == version_line
+    assert version_line == ""
 
     version_line = changelog.make_version_line("v1234", [commit])
     assert version_line == "# v1234"
@@ -100,24 +103,25 @@ def test_make_version_line():
 
 
 def test_print_changelog():
+    sha_range = ShaRange(
+        None, Inclusiveness.INCLUSIVE, "01783c84fd85acfcde57e1ac7d2ae933ba75de6f", Inclusiveness.INCLUSIVE
+    )
+
     with io.StringIO() as handle:
         changelog.print_changelog(
-            None,
-            True,
-            "c97a2b73b2128c114eda9d310e91be3ccce6c18f",
-            True,
+            sha_range,
             "Current",
-            False,
+            UseTags.TRUE,
             [],
             handle,
         )
         content = handle.getvalue()
-    with open("tests/through_c97a2b73b2128c114eda9d310e91be3ccce6c18f.txt") as f:
+    file_path = Path(__file__).parent / "through_01783c84fd85acfcde57e1ac7d2ae933ba75de6f.txt"
+    with file_path.open("r") as f:
         expected = f.read()
     assert content is not None
     assert len(content)
     assert content == expected
-    print(content)
 
 
 def test_format_body():
@@ -126,32 +130,3 @@ def test_format_body():
     assert changelog.format_body("body\nody", []) == ["body", "ody"]
     assert changelog.format_body("body\nody", ["ABC-123"]) == ["body", "ody"]
     assert changelog.format_body("body\nABC-123: ody", ["ABC-123"]) == ["body", "ody"]
-
-
-def chunk_from_file(filename: str):
-    print(f"pretending to run chunk_command but really loading from file {filename}")
-    with open(filename, "rb") as handle:
-        yield from changelog.stream_chunks(handle, "\x00")
-
-
-# @mock.patch("jmullan.git_changelog.changelog.chunk_command")
-# def test_print_changelog_complex(mock_chunk_command):
-#     mock_chunk_command.side_effect = lambda *_: chunk_from_file("tests/big.bin")
-#     with io.StringIO() as handle:
-#         changelog.print_changelog(
-#             None,
-#             True,
-#             "c97a2b73b2128c114eda9d310e91be3ccce6c18f",
-#             True,
-#             "Current",
-#             False,
-#             [],
-#             handle,
-#         )
-#         content = handle.getvalue()
-#     with open("tests/big.txt") as f:
-#         expected = f.read()
-#     assert content is not None
-#     assert len(content)
-#     print(content)
-#     assert content == expected

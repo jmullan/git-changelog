@@ -1,14 +1,20 @@
 #!/usr/bin/env python3.13
+"""Functions and classes to support building a CHANGELOG document."""
+
 import csv
+import enum
 import logging
 import os
+import pathlib
 import re
+import shlex
 import subprocess
 import sys
 import textwrap
+import typing
 from collections.abc import Iterator
 from dataclasses import dataclass, field, fields
-from typing import IO, Any, TextIO
+from typing import IO, TextIO, TypeGuard
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +46,7 @@ _ignore_matches = [
     r"^ *\.\.\. *$",
     r"^ *\.\.\. and [0-9]+ more commits *$",
     r"Merge in",
+    r"<!--[^\n]*-->",
 ]
 
 _delete_regexes = [
@@ -67,34 +74,92 @@ EMAILS_TO_NAMES = {}  # type: dict[str, str]
 DEFAULT_WIDTH = 100
 LIST_PREFIX = "- "
 LIST_CONTINUATION = "- "
+MIN_TICKET_FILE_ROW_LENGTH = 2
+
+
+B = typing.TypeVar("B", bound="BooleanEnum")
+
+
+class BooleanEnum(enum.Enum):
+    """Extend this to make simple two-value enums to replace boolean arguments."""
+
+    def __bool__(self):
+        """Cast me into a boolean."""
+        return bool(self.value)
+
+    @classmethod
+    def if_true(cls, true_false: bool) -> typing.Self:  # noqa: FBT001
+        """Build this enum from something truthy."""
+        for item in cls:
+            if bool(true_false) == bool(item.value):
+                return item
+        raise ValueError("Not a boolean")
+
+
+class Inclusiveness(BooleanEnum):
+    """Boolean-ish definitions."""
+
+    EXCLUSIVE = False
+    INCLUSIVE = True
+
+
+class UseTags(BooleanEnum):
+    """Boolean-ish definitions."""
+
+    FALSE = False
+    TRUE = True
+
+
+class Direction(enum.Enum):
+    """Boolean-ish definitions."""
+
+    REVERSE = enum.auto()
+    FORWARD = enum.auto()
+
+
+@dataclass
+class ShaRange:
+    """Holds a from, to, and whether to include each in the range."""
+
+    from_sha: str | None
+    from_inclusive: Inclusiveness
+    to_sha: str | None
+    to_inclusive: Inclusiveness
 
 
 def none_as_empty(string: str | None) -> str:
+    """Turn that None into an empty string or leave it alone."""
     if string is None:
         return ""
     return string
 
 
 def none_as_empty_stripped(string: str | None) -> str:
+    """Turn Nones into empty strings, and strip other strings."""
     return none_as_empty(string).strip()
 
 
-def is_empty(string: str | None) -> bool:
+def some_string(string: str | None) -> TypeGuard[str]:
+    """Determine if the string is None or blank."""
     if string is None:
-        return True
-    return len(string.strip()) == 0
+        return False
+    return len(string.strip()) > 0
 
 
-def load_jiras() -> dict[str, str]:
-    jiras_file_path = os.environ.get("JIRA_PATH")
-    jiras = dict()
-    if jiras_file_path is not None and os.path.exists(jiras_file_path):
-        with open(jiras_file_path, encoding="utf-8") as handle:
+def load_tickets() -> dict[str, str]:
+    """Try to load ticket data from a particular file."""
+    environ_path = os.environ.get("JIRA_PATH")
+    if environ_path is None:
+        return {}
+    tickets_file_path = pathlib.Path(environ_path)
+    tickets: dict[str, str] = {}
+    if tickets_file_path.exists():
+        with tickets_file_path.open(encoding="utf-8") as handle:
             reader = csv.reader(handle)
             for record in reader:
                 if not record:
                     continue
-                if len(record) < 2:
+                if len(record) < MIN_TICKET_FILE_ROW_LENGTH:
                     continue
                 key = record[0].strip()
                 if not len(key):
@@ -103,32 +168,37 @@ def load_jiras() -> dict[str, str]:
                 description = "\n".join(x for x in text if len(x))
                 if not len(description):
                     continue
-                jiras[key] = description
-    return jiras
+                tickets[key] = description
+    return tickets
 
 
 @dataclass
 class Tag:
+    """A named sha."""
+
     sha_sha: str = field(metadata={"template": "%(*objectname):%(objectname)"})
     ref_name: str = field(metadata={"template": "%(refname:short)"})
-    tagger_date: str = field(metadata={"template": "%(taggerdate:iso8601)"})
+    date: str = field(metadata={"template": "%(taggerdate:iso8601)"})
     subject: str = field(metadata={"template": "%(subject)"})
     body: str = field(metadata={"template": "%(body)"})
 
     @property
-    def sha(self):
+    def sha(self) -> str:
+        """Find the sha this tag points to."""
         parts = self.sha_sha.split(":")
         if len(parts[0]):
             return parts[0]
-        else:
-            return parts[1]
+        return parts[1]
 
-    def is_annotated(self):
-        return any(not is_empty(x) for x in [self.subject, self.body])
+    def is_annotated(self) -> bool:
+        """Check if this tag is annotated."""
+        return any(some_string(x) for x in [self.subject, self.body])
 
 
 @dataclass
 class Commit:
+    """The basic unit of a git log."""
+
     sha: str = field(metadata={"template": "%H"})
     date: str = field(metadata={"template": "%as"})
     email: str = field(metadata={"template": "%aE"})
@@ -144,77 +214,89 @@ class Commit:
     likely_jiras: list[str] = field(default_factory=list)
 
     @classmethod
-    def empty(cls):
+    def empty(cls) -> "Commit":
+        """Build a commit with nothing in it."""
         return cls(
             sha="",
             date="",
             email="",
+            original_email="",
             name="",
+            original_name="",
             refnames="",
             parents="",
             body="",
+            notes="",
             additional_jiras=[],
             likely_jiras=[],
         )
 
     @property
     def parent_shas(self) -> list[str]:
+        """Get the parents of this commit."""
         if self.parents is None:
             return []
         return self.parents.split(" ")
 
     @property
     def tag_names(self) -> list[str]:
+        """Find any tags associated with this commit."""
         tag_names = []
         refnames = none_as_empty_stripped(self.refnames)
-        if not is_empty(refnames):
+        if some_string(refnames):
             refs = refnames.split(",")
             for reference_name in refs:
-                reference_name = reference_name.strip()
-                if reference_name.startswith("tag: "):
-                    tag_names.append(reference_name.removeprefix("tag: "))
+                stripped = reference_name.strip()
+                if stripped.startswith("tag: "):
+                    tag_names.append(stripped.removeprefix("tag: "))
         return tag_names
 
     @property
-    def heads(self):
+    def heads(self) -> list[str]:
+        """Find any heads in this commit."""
         heads = []
         refnames = none_as_empty_stripped(self.refnames)
         if refnames:
             refs = refnames.split(",")
             for reference_name in refs:
-                reference_name = reference_name.strip()
-                if not reference_name.startswith("tag: "):
-                    heads.append(reference_name)
+                stripped_name = reference_name.strip()
+                if not stripped_name.startswith("tag: "):
+                    heads.append(stripped_name)
         return heads
 
     @property
     def jiras(self) -> list[str]:
+        """Get all the possible jiras from a commit."""
         return extract_jiras(self.body) + self.additional_jiras
 
-    def add_jiras(self, jiras: list[str]):
+    def add_jiras(self, jiras: list[str]) -> None:
+        """Add jiras if they are provided."""
         if jiras is not None:
             self.additional_jiras.extend(jiras)
 
-    def add_likely_jiras(self, jiras: list[str]):
+    def add_likely_jiras(self, jiras: list[str]) -> None:
+        """Add likely jiras if they are provided."""
         if jiras is not None:
             self.likely_jiras.extend(jiras)
 
     @property
     def subject(self) -> str:
+        """Use the first non-empty line from the body as a subject."""
         body = none_as_empty_stripped(self.body)
         return body.split("\n", 1)[0]
 
     @property
     def description(self) -> str:
+        """Cut up the body and haruspice the description."""
         body = none_as_empty_stripped(self.body)
         body_parts = body.split("\n", 1)
         if len(body_parts) > 1:
             return body_parts[1]
-        else:
-            return ""
+        return ""
 
     @property
     def clean_body(self) -> str:
+        """Cast out the impurities."""
         body = none_as_empty(self.body).strip("\n")
         lines = body.split("\n")
         lines = [line.rstrip() for line in lines]
@@ -226,10 +308,12 @@ class Commit:
 
     @property
     def is_merge_to_main(self) -> bool:
+        """Look for evidence that this commit is a merge to main."""
         return bool(re.search("Merge.*to (master|main)", self.body))
 
     @property
     def version(self) -> str | None:
+        """Look for likely version strings in a commit message."""
         matches = re.search(r"pre tag commit.*'(.*)'", self.subject)
         if matches:
             return matches.group(1)
@@ -237,16 +321,16 @@ class Commit:
 
     @property
     def month(self) -> str:
+        """Get the month from a commit."""
         date = self.date
         if date is not None:
             return date[:7]
         return ""
 
-    def is_likely_bot(self):
-        bots = ["dependabot", "sourcegraph.com", "githubactions-noreply"]
-        name_fields = {
-            f.lower() for f in [self.original_email, self.original_name, self.email, self.name]
-        }
+    def is_likely_bot(self) -> bool:
+        """Determine if the committer looks like a bot."""
+        bots = ["dependabot", "sourcegraph.com", "githubactions-noreply", "jenkins"]
+        name_fields = {f.lower() for f in [self.original_email, self.original_name, self.email, self.name]}
         for bot in bots:
             for name_field in name_fields:
                 if bot in name_field:
@@ -256,12 +340,16 @@ class Commit:
 
 @dataclass
 class Month:
+    """A month of the year and the commits that seem to live in it."""
+
     name: str
     commits: list
 
 
 @dataclass
 class Version:
+    """A supposed version and the commits it contains."""
+
     version_name: str
     commits: list[Commit]
 
@@ -284,6 +372,7 @@ GIT_COMMIT_FORMAT = "\n".join(
 
 
 def include_line(line: str | None) -> bool:
+    """Determine if the line is important enough to include."""
     return (
         line is not None
         and not any(x in line for x in _ignores)
@@ -292,27 +381,23 @@ def include_line(line: str | None) -> bool:
 
 
 def delete_junk(line: str) -> str:
+    """Remove junk strings from the line."""
     for regex in _delete_regexes:
         line = re.sub(regex, "", line, flags=re.IGNORECASE).strip()
     return line
 
 
-def add_star(line: str | None) -> str:
-    line = none_as_empty_stripped(line)
-    if line:
-        return textwrap.fill(line, initial_indent=LIST_PREFIX, subsequent_indent=LIST_CONTINUATION)
-    return line
-
-
 def extract_jiras(body: str | None) -> list[str]:
+    """Find things that look like jiras in the line."""
     if body is None:
         return []
     return list(set(re.findall("[A-Z]+-[0-9]+", body) or []))
 
 
 def strip_jiras(line: str, jiras: list[str]) -> str:
+    """Remove jiras from the line."""
     line = none_as_empty_stripped(line)
-    if is_empty(line):
+    if not some_string(line):
         return ""
     for jira in jiras:
         escaped = re.escape(jira)
@@ -321,6 +406,7 @@ def strip_jiras(line: str, jiras: list[str]) -> str:
 
 
 def format_tag_names(tags: list[str] | None) -> str:
+    """Turn tags into a heading."""
     if not tags:
         return ""
     tags = sorted(tags, key=best_tag)
@@ -329,6 +415,7 @@ def format_tag_names(tags: list[str] | None) -> str:
 
 
 def best_tag(tag_name: str) -> tuple[bool, bool, bool, int, str]:
+    """Find the most interesting tag."""
     tag_name = none_as_empty_stripped(tag_name)
     has_snapshot = "SNAPSHOT" in tag_name
     has_semantic_version = bool(re.match(r"^[0-9]+(\.[0-9]+){1,2}$", tag_name))
@@ -342,7 +429,8 @@ def best_tag(tag_name: str) -> tuple[bool, bool, bool, int, str]:
     )
 
 
-def tags_to_release_version(tags: list[str], found_version) -> str | None:
+def tags_to_release_version(tags: list[str], found_version: bool) -> str | None:  # noqa: FBT001
+    """Build a release version string from available tags."""
     semantic_versions = []
     semantic_sub_versions = []
     other_tags = []
@@ -364,56 +452,56 @@ def tags_to_release_version(tags: list[str], found_version) -> str | None:
 
 
 def format_body(body: str | None, jiras: list[str]) -> list[str]:
+    """Munge the body into something nice."""
     body = none_as_empty(body)
-    if is_empty(body):
+    if not some_string(body):
         return []
     lines = body.rstrip().split("\n")
     lines = [line for line in lines if include_line(line)]
     lines = [delete_junk(line) for line in lines]
     lines = [strip_jiras(line, jiras) for line in lines]
     lines = [delete_junk(line) for line in lines]
-    # lines = [add_star(line) for line in lines]
     lines = [line for line in lines if line]
+    logger.debug("lines: %s", lines)
     return lines
 
 
-def valid_name(name: str | None) -> bool:
+def valid_name(name: str | None) -> TypeGuard[str]:
+    """Filter out bot names."""
     name = none_as_empty_stripped(name)
-    if is_empty(name):
+    if not some_string(name):
         return False
     name = name.lower()
     if "jenkins builder" in name:
         return False
-    if name in INVALID_NAMES:
-        return False
-    return True
+    return name not in INVALID_NAMES
 
 
-def smart_name(commit: Commit):
+def smart_name(commit: Commit) -> str | None:
+    """Try to get the name or email from a commit."""
     name = none_as_empty_stripped(commit.name)
     if name:
         return name
     email = commit.email
-    if email in EMAILS_TO_NAMES:
-        return EMAILS_TO_NAMES[email]
+    return EMAILS_TO_NAMES.get(email) or email
 
 
 def format_names(commits: list[Commit]) -> str | None:
+    """Extract committer names from commits."""
     if not commits:
         return None
-    names = set(smart_name(commit) for commit in commits)
-    names = set(name for name in names if valid_name(name))
-    if not names:
-        return None
-    return ", ".join(sorted(names))
+    names = {smart_name(commit) for commit in commits}
+    valid_names = {name for name in names if valid_name(name)}
+    return ", ".join(sorted(valid_names))
 
 
 def make_version_line(release_version: str, commits: list[Commit]) -> str:
-    """Use the version string and the first commit to make a version string like
-    v.1234 (2024-04)
+    """Use the version string and the first commit to make a version string.
+
+    Example: v.1234 (2024-04)
     """
     version_string = none_as_empty_stripped(release_version)
-    if is_empty(version_string):
+    if not some_string(version_string):
         return ""
     if commits:
         first_commit = commits[0]
@@ -436,29 +524,30 @@ def fill_text(text: str, width: int, indent: str, initial_indent: str | None = N
     text = "\n".join(x.rstrip() for x in text.split("\n"))
     text = text.strip("\n")
     text = re.sub(r"\n\n\n+", "\n", text)
+
     texts = text.splitlines()
     if indent is not None and initial_indent is not None:
+        first_line = texts.pop(0)
+        first_line = textwrap.fill(first_line, width, initial_indent=initial_indent, subsequent_indent=indent)
         texts = [
-            textwrap.fill(line, width, initial_indent=initial_indent, subsequent_indent=indent)
-            for line in texts
+            textwrap.fill(line, width, initial_indent=indent, subsequent_indent=indent) for line in texts
+        ]  # Wrap each line
+        return "\n".join([first_line, *texts])
+    if initial_indent is not None:
+        first_line = texts.pop(0)
+        first_line = textwrap.fill(first_line, width, initial_indent=initial_indent)
+        texts = [textwrap.fill(line, width) for line in texts]  # Wrap each line
+        return "\n".join([first_line, *texts])
+    if indent is not None:
+        texts = [
+            textwrap.fill(line, width, initial_indent=indent, subsequent_indent=indent) for line in texts
         ]  # Wrap each line
         return "\n".join(texts)
-    elif indent is not None:
-        texts = [
-            textwrap.fill(line, width, initial_indent=indent, subsequent_indent=indent)
-            for line in texts
-        ]  # Wrap each line
-        return "\n".join(texts)
-    elif initial_indent is not None:
-        texts = [
-            textwrap.fill(line, width, initial_indent=initial_indent) for line in texts
-        ]  # Wrap each line
-        return "\n".join(texts)
-    else:
-        return text
+    return "\n".join(textwrap.fill(line, width) for line in texts)
 
 
 def format_commit(commit: Commit) -> list[str]:
+    """Build strings from a commit."""
     subject = commit.subject
     if not include_line(subject):
         return []
@@ -467,24 +556,24 @@ def format_commit(commit: Commit) -> list[str]:
     if subject_lines:
         commit_lines.extend(subject_lines)
     description = commit.description
-    if not is_empty(description):
+    if some_string(description):
         description_lines = format_body(description, commit.jiras)
         if description_lines:
             for description_line in description_lines:
                 if description_line not in commit_lines:
                     commit_lines.append(description_line)
-    if commit.is_likely_bot():
-        if commit_lines:
-            commit_line = commit_lines[0]
-            return [f"(bot) {commit_line}"]
+    if commit.is_likely_bot() and commit_lines:
+        commit_line = commit_lines[0]
+        return [f"(bot) {commit_line}"]
     return commit_lines
 
 
 def format_annotated_tag(tag: Tag) -> str | None:
+    """Make a string from an annotated tag."""
     if tag is None:
         return None
     ref_name = none_as_empty(tag.ref_name)
-    if is_empty(ref_name):
+    if not some_string(ref_name):
         # this should never happen
         return None
     subject = none_as_empty_stripped(tag.subject).strip()
@@ -492,7 +581,7 @@ def format_annotated_tag(tag: Tag) -> str | None:
     body = none_as_empty_stripped(tag.body).strip()
     body = delete_junk(body)
     tag_parts = []
-    if is_empty(subject):
+    if not some_string(subject):
         tag_parts.append(f"## Tag: `{ref_name}`")
     else:
         tag_parts.append(
@@ -503,7 +592,7 @@ def format_annotated_tag(tag: Tag) -> str | None:
                 subsequent_indent="    ",
             )
         )
-    if not is_empty(body):
+    if some_string(body):
         tag_parts.append("")
         body = fill_text(body, DEFAULT_WIDTH, "    ")
         tag_parts.append(body)
@@ -511,7 +600,24 @@ def format_annotated_tag(tag: Tag) -> str | None:
     return f"{tag_body}"
 
 
-def format_jira_commits(commits, jira_string, jiras_to_summaries: dict[str, str]) -> str:
+def fill_body(jira_string: str, summary_string: str, body: str, list_prefix: str) -> str:
+    """Build the full body from possible strings."""
+    if jira_string or summary_string:
+        not_body = fill_text(f"{jira_string} {summary_string}".strip(), DEFAULT_WIDTH, "    ", initial_indent="")
+    else:
+        not_body = ""
+
+    if not not_body:
+        return fill_text(body, DEFAULT_WIDTH, LIST_CONTINUATION, list_prefix)
+
+    if not len(body):
+        return not_body
+
+    return fill_text(body, DEFAULT_WIDTH, indent="    ", initial_indent=f"{not_body} ").strip()
+
+
+def smoosh_commits_into_body(commits: list[Commit]) -> str:
+    """Consolidate all commit messages into a single body."""
     lines = []
     seen_commits = set()
     for commit in commits:
@@ -523,9 +629,14 @@ def format_jira_commits(commits, jira_string, jiras_to_summaries: dict[str, str]
                     seen_commits.add(commit_line)
                     unique_commit_lines.append(commit_line)
                 lines.extend(unique_commit_lines)
-    body = "\n".join(lines).strip()
+    return "\n".join(lines).strip()
 
-    if is_empty(jira_string):
+
+def format_jira_commits(commits: list[Commit], jira_string: str | None, jiras_to_summaries: dict[str, str]) -> str:
+    """Turn jiras and their commits into a string."""
+    body = smoosh_commits_into_body(commits)
+
+    if not some_string(jira_string):
         return fill_text(body, DEFAULT_WIDTH, LIST_CONTINUATION, LIST_PREFIX)
 
     jiras = [jira.strip() for jira in jira_string.split(",")]
@@ -533,9 +644,7 @@ def format_jira_commits(commits, jira_string, jiras_to_summaries: dict[str, str]
     jiras_with_summaries = []
     if len(jiras) > 0:
         jiras_with_summaries = [
-            f"+ {jira}: {jiras_to_summaries[jira]}"
-            for jira in jiras
-            if jiras_to_summaries.get(jira)
+            f"+ {jira}: {jiras_to_summaries[jira]}" for jira in jiras if jiras_to_summaries.get(jira)
         ]
         jiras_without_summaries = [jira for jira in jiras if jira not in jiras_to_summaries]
         if len(jiras_with_summaries) > 0:
@@ -544,58 +653,22 @@ def format_jira_commits(commits, jira_string, jiras_to_summaries: dict[str, str]
                 jira_string = ", ".join(jiras_without_summaries)
             else:
                 jira_string = ""
-    if len(jira_string):
+    if jira_string:
         jira_string = f"{jira_string}:"
     if jiras_with_summaries:
         list_prefix = f"    {LIST_PREFIX}"
     else:
         list_prefix = LIST_PREFIX
-    if len(jira_string):
-        if len(summary_string) and len(body):
-            summary_string = fill_text(f"{jira_string} {summary_string}", DEFAULT_WIDTH, "    ")
-            return f"{summary_string}\n\n{body}"
-        elif len(summary_string):
-            return fill_text(f"{jira_string} {summary_string}", DEFAULT_WIDTH, "    ")
-        elif len(body):
-            if "\n" not in body:
-                return textwrap.fill(
-                    body,
-                    DEFAULT_WIDTH,
-                    initial_indent=f"{jira_string} ",
-                    subsequent_indent="    ",
-                ).strip()
-            else:
-                body = fill_text(body, DEFAULT_WIDTH, LIST_CONTINUATION, list_prefix)
-                return f"{jira_string}\n\n{body}"
-        else:
-            return f"{jira_string}"
-    else:
-        if len(summary_string) and len(body):
-            summary_string = fill_text(
-                f"{summary_string}", DEFAULT_WIDTH, "    ", initial_indent=""
-            )
-            body = fill_text(f"{body}", DEFAULT_WIDTH, list_prefix)
-            return f"{summary_string}\n\n{body}"
-        elif len(summary_string):
-            return fill_text(f"{summary_string}", DEFAULT_WIDTH, "    ", initial_indent="")
-        elif "\n" not in body:
-            return textwrap.fill(
-                body.removeprefix(list_prefix),
-                DEFAULT_WIDTH,
-                initial_indent="",
-                subsequent_indent="    ",
-            )
-        else:
-            body = fill_text(body, DEFAULT_WIDTH, LIST_CONTINUATION, list_prefix)
-            return f"{body}"
+    return fill_body(jira_string, summary_string, body, list_prefix)
 
 
-def format_month_commits(month_commits: list[Commit], jiras_to_summaries: dict[str, str]):
+def format_month_commits(month_commits: list[Commit], jiras_to_summaries: dict[str, str]) -> list[str]:
+    """Turn a month and its commits into a list of strings."""
     month_commit_lines = []
     commits_by_jiras: dict[str, list[Commit]] = {"": []}
     for commit in month_commits:
         jiras = commit.jiras or []
-        unique_jiras = set(jira.strip() for jira in jiras if not is_empty(jira))
+        unique_jiras = {jira.strip() for jira in jiras if some_string(jira)}
         if not jiras:
             jira_string = ""
         else:
@@ -611,22 +684,22 @@ def format_month_commits(month_commits: list[Commit], jiras_to_summaries: dict[s
     return month_commit_lines
 
 
-def make_notes(
-    version: Version, tags_by_tag_name: dict[str, Tag], jiras_to_summaries: dict[str, str]
-) -> str:
-    version_line = make_version_line(version.version_name, version.commits)
-    release_note = []
-    if version_line is not None and len(version_line):
-        release_note.append(version_line)
-    tags_notes = []
-    tags_by_format = {}
+def build_tags_by_format(version: Version) -> dict[str, list[str]]:
+    """Group tags by a formatted string combination of their names."""
+    tags_by_format: dict[str, list[str]] = {}
+    for commit in version.commits:
+        if commit.tag_names:
+            current_tag = format_tag_names(commit.tag_names)
+            tags_by_format[current_tag] = commit.tag_names
+    return tags_by_format
+
+
+def build_months_by_tag(version: Version) -> dict[str, dict[str, list[Commit]]]:
+    """Group a version's tag's commits into months."""
     months_by_tag: dict[str, dict[str, list[Commit]]] = {}
     current_tag = ""
     for commit in version.commits:
         current_month = commit.month
-        if commit.tag_names:
-            current_tag = format_tag_names(commit.tag_names)
-            tags_by_format[current_tag] = commit.tag_names
         if current_tag not in months_by_tag:
             months_by_tag[current_tag] = {}
         commits_by_month = months_by_tag[current_tag]
@@ -634,57 +707,71 @@ def make_notes(
             commits_by_month[current_month] = []
         current_month_commits = commits_by_month[current_month]
         current_month_commits.append(commit)
+    return months_by_tag
+
+
+def make_notes(version: Version, tags_by_tag_name: dict[str, Tag], jiras_to_summaries: dict[str, str]) -> str:
+    """Make the notes for a Version and its commits."""
+    version_line = make_version_line(version.version_name, version.commits)
+    release_note = []
+    if version_line is not None and len(version_line):
+        release_note.append(version_line)
+    tags_notes = []
+    tags_by_format = build_tags_by_format(version)
+    months_by_tag = build_months_by_tag(version)
 
     for formatted_tags, commits_by_month in months_by_tag.items():
-        if not is_empty(formatted_tags):
+        if some_string(formatted_tags):
             tag_names = tags_by_format[formatted_tags]
-            tags = {
-                tag_name: tags_by_tag_name[tag_name]
-                for tag_name in tag_names
-                if tag_name in tags_by_tag_name
-            }
+            tags = {tag_name: tags_by_tag_name[tag_name] for tag_name in tag_names if tag_name in tags_by_tag_name}
             annotated_tags = {tag_name: tag for tag_name, tag in tags.items() if tag.is_annotated()}
             for tag in annotated_tags.values():
                 tag_note = format_annotated_tag(tag)
                 if tag_note is not None:
                     tags_notes.append("")
                     tags_notes.append(tag_note)
-            remaining_tag_names = [
-                tag_name for tag_name in tag_names if tag_name not in annotated_tags
-            ]
+            remaining_tag_names = [tag_name for tag_name in tag_names if tag_name not in annotated_tags]
             if len(remaining_tag_names) > 0:
                 reformatted = format_tag_names(remaining_tag_names)
                 tags_notes.append("")
                 tags_notes.append(reformatted)
         for month, month_commits in commits_by_month.items():
-            if month not in version_line:
-                tags_notes.append("")
-                tags_notes.append(f"### {month}")
-            formatted_names = format_names(month_commits)
-            if not is_empty(formatted_names) and formatted_names is not None:
-                tags_notes.append("")
-                tags_notes.append(formatted_names)
-            month_commit_lines = format_month_commits(month_commits, jiras_to_summaries)
-            if len(month_commit_lines):
-                tags_notes.extend(month_commit_lines)
+            tags_notes.extend(build_month_commit_lines(month, month_commits, version_line, jiras_to_summaries))
     if tags_notes:
         release_note.extend(tags_notes)
     return "\n".join(release_note).strip()
 
 
+def build_month_commit_lines(
+    month: str, month_commits: list[Commit], version_line: str, jiras_to_summaries: dict[str, str]
+) -> list[str]:
+    """Build a new month section."""
+    tags_notes = []
+    if month not in version_line:
+        tags_notes.append("")
+        tags_notes.append(f"### {month}")
+    formatted_names = format_names(month_commits)
+    if some_string(formatted_names) and formatted_names is not None:
+        tags_notes.append("")
+        tags_notes.append(formatted_names)
+    month_commit_lines = format_month_commits(month_commits, jiras_to_summaries)
+    if len(month_commit_lines):
+        tags_notes.extend(month_commit_lines)
+    return tags_notes
+
+
 def prune_heads(heads: list[str]) -> list[str]:
+    """Turn a list of HEAD references into shorter names."""
     new_heads = []
     for head in heads:
-        if head.startswith("HEAD ->"):
-            head = head[8:]
-        elif head.endswith("/HEAD"):
-            head = head[:-5]
-        if head:
-            new_heads.append(head)
+        pruned_head = head.strip().removeprefix("HEAD ->").removesuffix("/HEAD")
+        if pruned_head:
+            new_heads.append(pruned_head)
     return new_heads
 
 
 def extract_refs(commit: Commit) -> dict[str, list[str]]:
+    """Find any refs in a commit."""
     sha = commit.sha
     parent_shas = commit.parent_shas or []
     heads = commit.heads or []
@@ -695,9 +782,8 @@ def extract_refs(commit: Commit) -> dict[str, list[str]]:
     if merge_matches:
         from_ref = merge_matches.group(1)
         to_ref = merge_matches.group(2)
-        if parent_shas and len(parent_shas) == 2:
+        if parent_shas and len(parent_shas) == len(merge_matches.groups()):
             left, right = parent_shas
-            logger.debug(f"{sha} : {right} {from_ref} + {left} {to_ref}")
             if right not in shas_to_refs:
                 shas_to_refs[right] = []
             shas_to_refs[right].append(from_ref)
@@ -708,6 +794,7 @@ def extract_refs(commit: Commit) -> dict[str, list[str]]:
 
 
 def stream_chunks(io: IO[bytes] | None, separator: str = "\n") -> Iterator[str]:
+    """Read a stream of bytes and yield strings divided by the separator."""
     separator_bytes = separator.encode("UTF8")
     accumulated = bytearray()
     keep_going = True
@@ -722,13 +809,17 @@ def stream_chunks(io: IO[bytes] | None, separator: str = "\n") -> Iterator[str]:
     yield accumulated.decode("UTF8")
 
 
-def chunk_command(args: Any):
-    """A mockable command"""
-    with subprocess.Popen(args, stdout=subprocess.PIPE) as proc:
+def chunk_command(args: list[str]) -> Iterator[str]:
+    """Run the args as a shell command.
+
+    This is provided to be mockable.
+    """
+    with subprocess.Popen(args, stdout=subprocess.PIPE) as proc:  # noqa: S603
         yield from stream_chunks(proc.stdout, "\x00")
 
 
 def git_tags() -> dict[str, Tag]:
+    """Find all the tags in the repo."""
     command = ["git", "for-each-ref", f"--format={GIT_TAG_FORMAT}", "refs/tags"]
     tags_by_tag: dict[str, Tag] = {}
     for chunk in chunk_command(command):
@@ -740,19 +831,21 @@ def git_tags() -> dict[str, Tag]:
 
 def git_log(
     git_format: str,
-    from_sha: str | None,
-    from_inclusive: bool | None,
-    to_sha: str | None,
-    to_inclusive: bool | None,
-    reversed: bool | None = None,
-    files: list[str] | None = None,
+    sha_range: ShaRange,
+    direction: Direction,
+    files: list[str] | None,
 ) -> Iterator[str]:
-    command = ["git", "log", "--all", "-z", f"--format={git_format}"]
+    """Run git log with a particular format."""
+    command = ["git", "log", "-z", f"--format={git_format}"]
+    from_sha = sha_range.from_sha
+    to_sha = sha_range.to_sha
+    from_inclusive = sha_range.from_inclusive
+    to_inclusive = sha_range.to_inclusive
     if to_inclusive:
         to_caret = ""
     else:
         to_caret = "^"
-    if from_sha is not None:
+    if sha_range.from_sha is not None:
         if from_inclusive:
             from_caret = "^"
         else:
@@ -760,30 +853,27 @@ def git_log(
         if to_sha is None:
             to_sha = "HEAD"
             to_caret = ""
-        sha_range = f"{from_sha}{from_caret}..{to_sha}{to_caret}"
-        command.append(sha_range)
-    elif to_sha is not None:
+        dot_sha_range = f"{from_sha}{from_caret}..{to_sha}{to_caret}"
+        command.append(dot_sha_range)
+    elif sha_range.to_sha is not None:
         from_sha = first_sha()
-        sha_range = f"{from_sha}..{to_sha}{to_caret}"
-        command.append(sha_range)
-    if reversed:
+        dot_sha_range = f"{from_sha}..{to_sha}{to_caret}"
+        command.append(dot_sha_range)
+    if direction == Direction.REVERSE:
         command.append("--reverse")
     if files:
-        command.extend(files)
+        command.extend([shlex.quote(f) for f in files])
     yield from chunk_command(command)
 
 
 def git_commits_by_sha(
-    from_sha: str | None,
-    from_inclusive: bool | None,
-    to_sha: str | None,
-    to_inclusive: bool | None,
-    files: list[str] | None = None,
+    sha_range: ShaRange,
+    direction: Direction,
+    files: list[str],
 ) -> dict[str, Commit]:
+    """Load commits for a particular range and make them into Commit objects."""
     commits_by_sha = {}  # type: dict[str, Commit]
-    for chunk in git_log(
-        GIT_COMMIT_FORMAT, from_sha, from_inclusive, to_sha, to_inclusive, files=files
-    ):
+    for chunk in git_log(GIT_COMMIT_FORMAT, sha_range, direction, files=files):
         commit = chunk_to_commit(chunk)
         if commit is None:
             logger.debug("None commit")
@@ -793,17 +883,19 @@ def git_commits_by_sha(
 
 
 def first_sha() -> str:
+    """Find the very first sha in a git repo."""
     command = ["git", "hash-object", "-t", "tree", "/dev/null"]
-    result = subprocess.run(command, stdout=subprocess.PIPE)
+    result = subprocess.run(command, check=False, stdout=subprocess.PIPE)  # noqa: S603
     return result.stdout.decode("UTF8").strip()
 
 
 def extract_header_fields(header: str) -> dict[str, str]:
-    if is_empty(header):
+    """Convert a specially formatted string into a dictionary."""
+    if not some_string(header):
         return {}
     data = {}
     for line in header.split("\n"):
-        if is_empty(line):
+        if not some_string(line):
             continue
         key, value = line.split(" ", 1)
         data[key] = value
@@ -811,6 +903,7 @@ def extract_header_fields(header: str) -> dict[str, str]:
 
 
 def chunk_to_tag(chunk: str) -> Tag | None:
+    """Build a tag from a string."""
     if chunk is None:
         return None
     if "\nbody" not in chunk:
@@ -820,13 +913,13 @@ def chunk_to_tag(chunk: str) -> Tag | None:
     tag_data = {"body": body.removeprefix(" ").rstrip()}
     tag_data.update(extract_header_fields(header))
     sha_sha = tag_data.get("sha_sha")
-    if is_empty(sha_sha):
+    if not some_string(sha_sha):
         logger.debug("No sha_sha in commit %s", chunk)
         return None
     if sha_sha is not None:
         # mypy can't tell that not is_empty means not None :(
         parts = sha_sha.split(":")
-        if len(parts) == 0 or is_empty(parts[0]):
+        if len(parts) == 0 or not some_string(parts[0]):
             # looks like this is actually not an annotated tag
             tag_data["subject"] = ""
             tag_data["body"] = ""
@@ -834,13 +927,12 @@ def chunk_to_tag(chunk: str) -> Tag | None:
 
 
 def chunk_to_commit(chunk: str) -> Commit | None:
+    """Turn a chunk into a commit object."""
     if chunk is None:
         return None
     abbreviated_sha = chunk.split(" ", 1)[0]
     field_pieces = chunk.removeprefix(f"{abbreviated_sha} ").split(f"\n{abbreviated_sha} ")
-    commit_data = {
-        p[0]: p[1] for p in [piece.split(" ", 1) for piece in field_pieces] if len(p) > 1
-    }
+    commit_data = {p[0]: p[1] for p in [piece.split(" ", 1) for piece in field_pieces] if len(p) > 1}
     if "body" not in commit_data:
         logger.debug("body not in commit %r", chunk)
         return None
@@ -851,14 +943,15 @@ def chunk_to_commit(chunk: str) -> Commit | None:
     try:
         return Commit(**commit_data)  # type: ignore[arg-type]
     except TypeError:
-        print(chunk, commit_data)
+        logger.exception("error processing chunk %s %s", chunk, commit_data)
         raise
 
 
 def all_ancestors(sha: str, commits_by_sha: dict[str, Commit]) -> set[str]:
+    """Find all sha ancestors from a given sha."""
     stack: list[str] = [sha]
     found = set()
-    while len(stack):
+    while stack:
         sha = stack.pop()
         if sha in found:
             continue
@@ -876,14 +969,11 @@ def all_ancestors(sha: str, commits_by_sha: dict[str, Commit]) -> set[str]:
     return found
 
 
-def get_tag_tree(
-    tags_by_sha: dict[str, Tag], commits_by_sha: dict[str, Commit]
-) -> dict[str, list[str]]:
+def get_tag_graph(tags_by_sha: dict[str, Tag], commits_by_sha: dict[str, Commit]) -> dict[str, list[str]]:
+    """Build a graph of tags and their predecessors."""
     ancestors: dict[str, list[str]] = {}
-    for sha, tag in tags_by_sha.items():
-        ancestors[sha] = [
-            a for a in all_ancestors(sha, commits_by_sha) if a in tags_by_sha and a != sha
-        ]
+    for sha in tags_by_sha:
+        ancestors[sha] = [a for a in all_ancestors(sha, commits_by_sha) if a in tags_by_sha and a != sha]
     for sha, heritage in ancestors.items():
         # remove anything also included in parent heritages
         retained = set(heritage)
@@ -894,112 +984,32 @@ def get_tag_tree(
     return {x: list(y) for x, y in ancestors.items()}
 
 
-def order_tags(tag_tree: dict[str, list[str]], commits_by_sha: dict[str, Commit]) -> list[str]:
+def order_tags(use_tags: UseTags, tags_by_sha: dict[str, Tag], commits_by_sha: dict[str, Commit]) -> list[str]:
+    """Build a list of tags ordered by their heirarchy and commit date."""
+    if use_tags != UseTags.TRUE:
+        return []
+    tag_tree = get_tag_graph(tags_by_sha, commits_by_sha)
     ordered_tags = []
     seen_tag_shas: set[str] = set()
     tags_to_check = list(tag_tree.keys())
-    while len(tags_to_check):
-        leaves = []
-        for sha in tags_to_check:
-            if not set(tag_tree[sha]) - seen_tag_shas:
-                leaves.append(sha)
+    while tags_to_check:
+        leaves = [sha for sha in tags_to_check if not set(tag_tree[sha]) - seen_tag_shas]
         for leaf in leaves:
             tags_to_check.remove(leaf)
             seen_tag_shas.add(leaf)
-        ordered_tags.extend(sorted(leaves, key=lambda sha: commits_by_sha[sha].date))
+        ordered_tags.extend(sorted(leaves, key=lambda sha: (commits_by_sha.get(sha) or tags_by_sha[sha]).date))
     return ordered_tags
 
 
-def print_changelog(
-    from_sha: str | None = None,
-    from_inclusive: bool | None = False,
-    to_sha: str | None = None,
-    to_inclusive: bool | None = False,
-    version: str | None = None,
-    use_tags: bool | None = False,
-    files: list[str] | None = None,
-    out: TextIO | None = sys.stdout,
-):
-    if out is None:
-        out = sys.stdout
-    tags_by_tag_name = git_tags()
-    jiras_to_summaries = load_jiras()
-    commits_by_sha = git_commits_by_sha(from_sha, from_inclusive, to_sha, to_inclusive, files=files)
-
-    shas_to_refs: dict[str, list[str]] = {}
-    child_shas: dict[str, list[str]] = {}
-    for sha, commit in commits_by_sha.items():
-        if sha not in child_shas:
-            child_shas[sha] = []
-        for parent_sha in commit.parent_shas or []:
-            if parent_sha not in child_shas:
-                child_shas[parent_sha] = []
-            child_shas[parent_sha].append(sha)
-        commit_shas_to_refs = extract_refs(commit)
-        for commit_sha, refs in commit_shas_to_refs.items():
-            if refs:
-                if commit_sha not in shas_to_refs:
-                    shas_to_refs[commit_sha] = []
-                shas_to_refs[commit_sha].extend(refs)
-    for sha, commit in commits_by_sha.items():
-        refs = shas_to_refs.get(sha) or []
-        children = child_shas.get(sha) or []
-        walked = []
-        while not refs and len(children) == 1:
-            child_sha = children[0]
-            walked.append(child_sha)
-            refs = shas_to_refs.get(child_sha) or []
-            children = child_shas.get(child_sha) or []
-        if refs:
-            for child_sha in walked:
-                if not shas_to_refs.get(child_sha):
-                    shas_to_refs[child_sha] = refs
-        parent_shas = commit.parent_shas or []
-        walked = []
-        while not refs and len(parent_shas) == 1:
-            parent_sha = parent_shas[0]
-            walked.append(parent_sha)
-            refs = shas_to_refs.get(parent_sha) or []
-            parent = commits_by_sha.get(parent_sha)
-            parent_shas = (parent and parent.parent_shas) or []
-        if refs:
-            for parent_sha in walked:
-                if not shas_to_refs.get(parent_sha):
-                    shas_to_refs[parent_sha] = refs
-        shas_to_refs[sha] = refs
-
-    for sha, commit in commits_by_sha.items():
-        parent_shas = commit.parent_shas or []
-        if commit.is_merge_to_main and len(parent_shas) in (1, 2):
-            parent_sha = parent_shas[-1]
-            parent = commits_by_sha.get(parent_sha)
-
-            if parent is not None:
-                shares_subject = commit.subject in parent.body
-
-                if not parent.jiras:
-                    if commit.is_merge_to_main or shares_subject:
-                        logger.debug(f"adding {commit.jiras} from child {sha} to {parent_sha}")
-                        parent.add_jiras(commit.jiras)
-                    else:
-                        parent.add_likely_jiras(commit.jiras)
-                elif not commit.jiras:
-                    logger.debug(f"adding {commit.jiras} from parent {parent_sha} to {sha}")
-                    if commit.is_merge_to_main or shares_subject:
-                        commit.add_jiras(parent.jiras)
-                    else:
-                        commit.add_likely_jiras(parent.jiras)
-
+def build_commit_groups(
+    version: str | None,
+    commits_by_sha: dict,
+    use_tags: UseTags,
+    ordered_tags: list[str],
+    tags_by_sha: dict[str, Tag],
+) -> dict[str, list[Commit]]:
+    """Group commits / shas by version-ish name."""
     version_tree: dict[str, list[Commit]] = {}
-
-    use_tags = use_tags or False
-    tags_by_sha = {tag.sha: tag for tag in tags_by_tag_name.values()}
-    if use_tags:
-        tag_tree = get_tag_tree(tags_by_sha, commits_by_sha)
-        ordered_tags = order_tags(tag_tree, commits_by_sha)
-    else:
-        ordered_tags = []
-
     found_version = False
     for sha, commit in commits_by_sha.items():
         group_name = version or "Unknown"
@@ -1021,13 +1031,75 @@ def print_changelog(
         if group_name not in version_tree:
             version_tree[group_name] = []
         version_tree[group_name].append(commit)
+    return version_tree
 
+
+def build_versions(commit_groups: dict[str, list[Commit]]) -> list[Version]:
+    """Build version names from commit groups."""
     versions: list[Version] = []
-    for group_name, commits in version_tree.items():
+    for group_name, commits in commit_groups.items():
         if not commits:
             continue
         group_version = Version(group_name, commits)
         versions.append(group_version)
+    return versions
+
+
+def populate_jiras_from_parents(commits_by_sha: dict[str, Commit]) -> dict[str, Commit]:
+    """Populate a jira from the parent commits of a sha."""
+    for sha, commit in commits_by_sha.items():
+        parent_shas = commit.parent_shas or []
+        if commit.is_merge_to_main and len(parent_shas) in (1, 2):
+            parent_sha = parent_shas[-1]
+            parent = commits_by_sha.get(parent_sha)
+
+            if parent is not None:
+                shares_subject = commit.subject in parent.body
+
+                if not parent.jiras:
+                    if commit.is_merge_to_main or shares_subject:
+                        logger.debug("adding %s from child %s to %s", commit.jiras, sha, parent_sha)
+                        parent.add_jiras(commit.jiras)
+                    else:
+                        parent.add_likely_jiras(commit.jiras)
+                elif not commit.jiras:
+                    logger.debug("adding %s from parent %s to %s", commit.jiras, parent_sha, sha)
+                    if commit.is_merge_to_main or shares_subject:
+                        commit.add_jiras(parent.jiras)
+                    else:
+                        commit.add_likely_jiras(parent.jiras)
+    return commits_by_sha
+
+
+def print_changelog(
+    sha_range: ShaRange,
+    version: str | None,
+    use_tags: UseTags,
+    files: list[str],
+    out: TextIO | None,
+) -> None:
+    """Print a nice changelog for the repo."""
+    if out is None:
+        out = sys.stdout
+    tags_by_tag_name = git_tags()
+    jiras_to_summaries = load_tickets()
+
+    commits_by_sha = git_commits_by_sha(sha_range, Direction.FORWARD, files=files)
+
+    commits_by_sha = populate_jiras_from_parents(commits_by_sha)
+
+    tags_by_sha = {tag.sha: tag for tag in tags_by_tag_name.values()}
+
+    ordered_tags = order_tags(use_tags, tags_by_sha, commits_by_sha)
+
+    commit_groups = build_commit_groups(
+        version,
+        commits_by_sha,
+        use_tags,
+        ordered_tags,
+        tags_by_sha,
+    )
+    versions = build_versions(commit_groups)
 
     changes = []
     for group_version in versions:
@@ -1037,7 +1109,6 @@ def print_changelog(
         if notes:
             changes.append(notes)
     if changes:
-        # changes = reversed(changes)
         changelog = "\n\n".join(changes)
         out.write(changelog.rstrip())
         out.write("\n")

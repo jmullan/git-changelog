@@ -1,16 +1,20 @@
 #!/usr/bin/env python3.13
+"""The main changelog logic."""
+
 import logging
 import sys
 
-from jmullan.cmd import cmd
+from jmullan.git_changelog.changelog import Inclusiveness, ShaRange, UseTags, print_changelog
 from jmullan.logging import easy_logging
 
-from jmullan.git_changelog.changelog import print_changelog
+from jmullan.cmd import cmd
 
 logger = logging.getLogger(__name__)
 
 
 class ChangeLogMain(cmd.Main):
+    """Print the changelog for the current repo."""
+
     def __init__(self):
         super().__init__()
         self.parser.add_argument(
@@ -44,12 +48,11 @@ class ChangeLogMain(cmd.Main):
             default=True,
             help="Use tags and other found versions",
         )
-        self.parser.add_argument(
-            "--file", dest="files", action="append", default=[], required=False
-        )
+        self.parser.add_argument("--file", dest="files", action="append", default=[], required=False)
         self.parser.add_argument("version", default="Current", nargs="?")
 
-    def setup(self):
+    def setup(self) -> None:
+        """Configure logging."""
         super().setup()
         if self.args.verbose:
             easy_logging.easy_initialize_logging("DEBUG", stream=sys.stderr)
@@ -58,26 +61,27 @@ class ChangeLogMain(cmd.Main):
         else:
             easy_logging.easy_initialize_logging("INFO", stream=sys.stderr)
 
-    def main(self):
+    def main(self) -> None:
+        """Print a changelog."""
         super().main()
         files = self.args.files or []
 
         from_sha = self.args.after or self.args.since
-        from_inclusive = from_sha is None or self.args.since is not None
+        from_inclusive = Inclusiveness.if_true(from_sha is None or self.args.since is not None)
         to_sha = self.args.until or self.args.through
-        to_inclusive = to_sha is None or self.args.through is not None
+        to_inclusive = Inclusiveness.if_true(to_sha is None or self.args.through is not None)
+        sha_range = ShaRange(from_sha, from_inclusive, to_sha, to_inclusive)
         print_changelog(
-            from_sha,
-            from_inclusive,
-            to_sha,
-            to_inclusive,
+            sha_range,
             self.args.version,
-            self.args.use_tag_names,
+            UseTags.if_true(self.args.use_tag_names),
             files,
+            None,
         )
 
 
-def main():
+def main() -> None:
+    """Run the command."""
     ChangeLogMain().main()
 
 

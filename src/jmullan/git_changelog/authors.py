@@ -1,16 +1,19 @@
 #!/usr/bin/env python3.13
+"""Functions and cli command to get author information from a git repo."""
+
 import csv
 import dataclasses
 import logging
-import os
+import pathlib
 import re
 import sys
-from typing import Any, TextIO
-
-from jmullan.cmd import cmd
-from jmullan.logging import easy_logging
+from typing import TextIO, TypeVar
 
 from jmullan.git_changelog import changelog
+from jmullan.git_changelog.changelog import Direction, Inclusiveness, ShaRange
+from jmullan.logging import easy_logging
+
+from jmullan.cmd import cmd
 
 logger = logging.getLogger(__name__)
 
@@ -25,45 +28,53 @@ DEFAULT_FORMAT = "simple"
 orderings = ["appearance", "email", "name"]
 DEFAULT_ORDERING = "appearance"
 
+T = TypeVar("T")
+
 
 def open_file_or_stdout_for_writing(filename: str | None) -> TextIO:
+    """Return a file handle to a file or to stdout."""
     if filename is None or filename == "-":
         return sys.stdout
-    else:
-        return open(filename, "w", encoding="utf8")
+    return pathlib.Path(filename).open("w", encoding="utf8")
 
 
 @dataclasses.dataclass
 class Author:
-    original_email: str | None
-    email: str | None
-    original_name: str | None
-    name: str | None
-    original_username: str | None
-    username: str | None
+    """An author in the repo, possibly with an updated email and name."""
+
+    original_email: str
+    email: str
+    original_name: str
+    name: str
+    original_username: str
+    username: str
 
     @property
-    def original_address(self):
+    def original_address(self) -> str:
+        """Get the name-addr without mailmap replacement.
+
+        See: https://datatracker.ietf.org/doc/html/rfc2822#section-3.4
         """
-        A name-addr
-        See: https://datatracker.ietf.org/doc/html/rfc2822#section-3.4"""
         return f"{self.original_name} <{self.original_email}>"
 
     @property
-    def address(self):
+    def address(self) -> str:
+        """Get the name-addr with any mailmap replacement.
+
+        See: https://datatracker.ietf.org/doc/html/rfc2822#section-3.4
         """
-        A name-addr
-        See: https://datatracker.ietf.org/doc/html/rfc2822#section-3.4"""
         return f"{self.name} <{self.email}>"
 
     @property
-    def full(self):
+    def full(self) -> str:
+        """Get the full mapping from original to replaced."""
         return f"{self.original_address}:{self.address}:{self.original_username}:{self.username}"
 
 
-def get_username_from_email(email: str | None) -> str | None:
+def get_username_from_email(email: str) -> str:
+    """Extract just the username from an email."""
     if email is None:
-        return None
+        return ""
     match = re.match("^([^@]+)@", email)
     if match:
         return match.group(1)
@@ -71,14 +82,15 @@ def get_username_from_email(email: str | None) -> str | None:
 
 
 def load_mailmap() -> list[Author]:
-    if not os.path.exists(".mailmap"):
+    """Load the mailmap into a list of Authors."""
+    mail_map_path = pathlib.Path(".mailmap")
+    if not mail_map_path.exists():
         return []
     uniques: set[str] = set()
     authors: list[Author] = []
-    with open(".mailmap") as fp:
-        for line in fp.readlines():
-            line = line.strip()
-            match = re.match(r"(.*)<([^>]*)>\s*(.*)<([^>]*)>\s*", line)
+    with mail_map_path.open() as fp:
+        for line in fp:
+            match = re.match(r"(.*)<([^>]*)>\s*(.*)<([^>]*)>\s*", line.strip())
             if match:
                 name = match.group(1).strip()
                 email = match.group(2).strip()
@@ -88,7 +100,7 @@ def load_mailmap() -> list[Author]:
                 username = get_username_from_email(email)
                 original_username = get_username_from_email(original_email)
 
-                author_fields: dict[str, str | None] = {
+                author_fields: dict[str, str] = {
                     "original_email": original_email,
                     "email": email,
                     "original_username": original_username,
@@ -107,12 +119,10 @@ def load_mailmap() -> list[Author]:
 
 
 def extract_authors(
-    from_sha: str | None = None,
-    from_inclusive: bool | None = False,
-    to_sha: str | None = None,
-    to_inclusive: bool | None = False,
-    files: list[str] | None = None,
+    sha_range: ShaRange,
+    files: list[str] | None,
 ) -> list[Author]:
+    """Build a list of authors from git logs."""
     fields = {
         "original_email": "ae",
         "email": "aE",
@@ -125,48 +135,83 @@ def extract_authors(
     git_format = f"%h {fields_format}"
     uniques: set[str] = set()
     authors: list[Author] = []
-    for line in changelog.git_log(
-        git_format, from_sha, from_inclusive, to_sha, to_inclusive, reversed=True, files=files
-    ):
+    for line in changelog.git_log(git_format, sha_range, Direction.REVERSE, files):
         if line is None or len(line) < 1:
             continue
         parts = line.split(" ", 1)
-        if len(parts) != 2:
+        if len(parts) != 2:  # noqa: PLR2004
             logger.debug("Weird log line %s", line)
             continue
-        sha, line = parts
-        if sha not in line:
+        sha, remainder = parts
+        if sha not in remainder:
             logger.debug("Weird log line %s", line)
             continue
         field_values = {}
-        for kv in [x for x in line.strip().split(sha) if x and ":" in x]:
+        for kv in [x for x in remainder.strip().split(sha) if x and ":" in x]:
             k, v = kv.split(":", 1)
             field_values[k] = v
         unique = " ".join(field_values.values())
         if unique in uniques:
             continue
         uniques.add(unique)
-        author_fields = {k: field_values.get(v) for k, v in fields.items()}
+        author_fields = {k: field_values.get(v) or "" for k, v in fields.items()}
         author = Author(**author_fields)
         authors.append(author)
+
     return authors
 
 
-def add_lower_if_not_none(to_dict: dict[str, Any], key: str | None, value: Any):
-    if key is not None:
-        to_dict[key.lower()] = value
+def extract_coauthors(sha_range: ShaRange, files: list[str] | None) -> list[Author]:
+    """Get coauthors from git logs.
+
+    See: https://docs.github.com/en/pull-requests/committing-changes-to-your-project/creating-and-editing-commits/creating-a-commit-with-multiple-authors
+
+    """
+    authors = []
+    git_format = "%(body)"
+    for line in changelog.git_log(git_format, sha_range, Direction.REVERSE, files):
+        stripped = line.strip()
+        if not stripped.startswith("Co-authored-by:"):
+            continue
+        co_author = stripped.removeprefix("Co-authored-by:").strip()
+        match = re.match(r"(.*)\s*<([^>]+@[^>]+)>", co_author)
+        if not match:
+            continue
+        name = match.group(1).strip()
+        email = match.group(2).strip()
+        if len(name) and len(email):
+            author = Author(
+                original_email=email,
+                email=email,
+                original_name=name,
+                name=name,
+                original_username=get_username_from_email(email),
+                username=get_username_from_email(email),
+            )
+            authors.append(author)
+    return authors
 
 
-def get_lower_if_not_none(from_dict: dict[str, Any], key: str | None) -> Any:
+def add_by_lower_key_if_key_is_not_none(to_dict: dict[str, T], key: str | None, value: T) -> None:
+    """Add the value to a dictionary if the key is not None."""
     if key is not None:
-        return from_dict.get(key.lower())
-    else:
-        return None
+        to_dict[key.lower().strip()] = value
+
+
+def get_by_lower_key_if_key_is_not_none[V](from_dict: dict[str, V], key: str | None) -> V | None:
+    """Get a value from a dictionary if the key is not None."""
+    if key is not None:
+        return from_dict.get(key.lower().strip())
+    return None
 
 
 def resolve_authors(authors: list[Author], mailmap_authors: list[Author]) -> list[Author]:
-    """Given a list of authors and a list from the mailmap, produce a combined list that
-    can be dumped to a .mailmap. This should produce at least one line per address, but
+    """Produce a list of authors for a dot-mail-map.
+
+    Given a list of authors and a list from the mailmap, produce a combined list that
+    can be dumped to a .mailmap.
+
+    This should produce at least one line per address, but
     will not produce a line mapping an address to itself if there is already a mapping
     to that address from another address.
 
@@ -178,25 +223,25 @@ def resolve_authors(authors: list[Author], mailmap_authors: list[Author]) -> lis
     address_mappings: dict[str, Author] = {}
     for source in [mailmap_authors, authors]:
         for author in source:
-            add_lower_if_not_none(email_mappings, author.original_email, author)
-            add_lower_if_not_none(email_mappings, author.email, author)
-            add_lower_if_not_none(name_mappings, author.original_username, author)
-            add_lower_if_not_none(name_mappings, author.username, author)
-            add_lower_if_not_none(name_mappings, author.original_name, author)
-            add_lower_if_not_none(name_mappings, author.name, author)
-            add_lower_if_not_none(address_mappings, author.original_address, author)
-            add_lower_if_not_none(address_mappings, author.address, author)
+            add_by_lower_key_if_key_is_not_none(email_mappings, author.original_email, author)
+            add_by_lower_key_if_key_is_not_none(email_mappings, author.email, author)
+            add_by_lower_key_if_key_is_not_none(name_mappings, author.original_username, author)
+            add_by_lower_key_if_key_is_not_none(name_mappings, author.username, author)
+            add_by_lower_key_if_key_is_not_none(name_mappings, author.original_name, author)
+            add_by_lower_key_if_key_is_not_none(name_mappings, author.name, author)
+            add_by_lower_key_if_key_is_not_none(address_mappings, author.original_address, author)
+            add_by_lower_key_if_key_is_not_none(address_mappings, author.address, author)
     combined_authors: list[Author] = []
     for source in [mailmap_authors, authors]:
         for from_author in source:
             to_author = None
-            to_address = get_lower_if_not_none(address_mappings, from_author.address)
+            to_address = get_by_lower_key_if_key_is_not_none(address_mappings, from_author.address)
             if to_address and to_address.address != from_author.address:
                 to_author = to_address
-            to_email = get_lower_if_not_none(email_mappings, from_author.email)
+            to_email = get_by_lower_key_if_key_is_not_none(email_mappings, from_author.email)
             if to_email and not to_author and to_email.address != from_author.address:
                 to_author = to_email
-            to_name = get_lower_if_not_none(name_mappings, from_author.name)
+            to_name = get_by_lower_key_if_key_is_not_none(name_mappings, from_author.name)
             if to_name and not to_author and to_name.address != from_author.address:
                 to_author = to_name
             if not to_author:
@@ -210,6 +255,12 @@ def resolve_authors(authors: list[Author], mailmap_authors: list[Author]) -> lis
                 username=to_author.username,
             )
             combined_authors.append(new_author)
+    finalized_authors: list[Author] = finalize_authors(combined_authors)
+    return sorted(finalized_authors, key=lambda a: f"{a.name} {a.email}")
+
+
+def finalize_authors(combined_authors: list[Author]) -> list[Author]:
+    """Remove and resolve duplicate authors."""
     mapped_addresses: set[str] = set()
     for combined_author in combined_authors:
         if combined_author.address != combined_author.original_address:
@@ -220,67 +271,84 @@ def resolve_authors(authors: list[Author], mailmap_authors: list[Author]) -> lis
         original_address = author.original_address
         if author.address != original_address or original_address not in mapped_addresses:
             finalized_authors[author.full] = author
+    return list(finalized_authors.values())
 
-    return list(sorted(finalized_authors.values(), key=lambda a: f"{a.name} {a.email}"))
+
+def output_csv(authors: list[Author], output_handle: TextIO) -> None:
+    """Write authors to a CSV file or stdout."""
+    seen_lines: set[str] = set()
+    writer = csv.writer(output_handle)
+    for author in authors:
+        csv_tuple = author.email, author.username, author.name
+        line = ",".join(f"{x}" for x in csv_tuple if x is not None)
+        if line not in seen_lines:
+            writer.writerow(csv_tuple)
+            seen_lines.add(line)
+
+
+def output_mailmap(authors: list[Author], output_handle: TextIO) -> None:
+    """Write authors to a mail map file or stdout."""
+    seen_lines: set[str] = set()
+    mailmap_authors = load_mailmap()
+    for author in resolve_authors(authors, mailmap_authors):
+        line = f"{author.address} {author.original_address}"
+        if line not in seen_lines:
+            print(f"{line}", file=output_handle)
+            seen_lines.add(line)
+
+
+def output_pyproject(authors: list[Author], output_handle: TextIO) -> None:
+    """Write authors as a pyproject author list in toml format to a file or stdout."""
+    print("authors = [", file=output_handle)
+    lines = {f'    {{name = "{author.name}", email = "{author.email}"}}' for author in authors}
+    print(",\n".join(lines), file=output_handle)
+    print("]", file=output_handle)
+
+
+def output_list(authors: list[Author], output_handle: TextIO) -> None:
+    """Write authors to a plain list of emails."""
+    seen_lines: set[str] = set()
+    for author in authors:
+        line = f"{author.name} <{author.email}>"
+        if line not in seen_lines:
+            print(f"{line}", file=output_handle)
+            seen_lines.add(line)
 
 
 def output_authors(
-    from_sha: str | None = None,
-    from_inclusive: bool | None = False,
-    to_sha: str | None = None,
-    to_inclusive: bool | None = False,
-    output_format: str | None = DEFAULT_FORMAT,
-    ordering: str | None = DEFAULT_ORDERING,
-    reversed: bool | None = False,
-    files: list[str] | None = None,
+    authors: list[Author],
+    output_format: str | None,
+    ordering: str | None,
+    direction: Direction,
     output: str | None = None,
-):
+) -> None:
+    """Print the authors in your chosen format."""
     if output_format is None:
         output_format = DEFAULT_FORMAT
     if ordering is None:
         ordering = DEFAULT_ORDERING
-    authors = extract_authors(from_sha, from_inclusive, to_sha, to_inclusive, files)
 
     if ordering == "email":
-        authors = sorted(authors, key=lambda author: (f"{author.email}", f"{author.name}"))
+        authors = sorted(authors, key=lambda a: (f"{a.email}", f"{a.name}"))
     elif ordering == "name":
-        authors = sorted(authors, key=lambda author: (f"{author.email}", f"{author.email}"))
-    if reversed:
+        authors = sorted(authors, key=lambda a: (f"{a.email}", f"{a.email}"))
+    if direction == Direction.REVERSE:
         authors.reverse()
-    seen_lines: set[str] = set()
 
     with open_file_or_stdout_for_writing(output) as output_handle:
         if output_format == "csv":
-            writer = csv.writer(output_handle)
-            for author in authors:
-                csv_tuple = author.email, author.username, author.name
-                line = ",".join(f"{x}" for x in csv_tuple if x is not None)
-                if line not in seen_lines:
-                    writer.writerow(csv_tuple)
-                    seen_lines.add(line)
+            output_csv(authors, output_handle)
         elif output_format == "mailmap":
-            mailmap_authors = load_mailmap()
-            for author in resolve_authors(authors, mailmap_authors):
-                line = f"{author.address} {author.original_address}"
-                if line not in seen_lines:
-                    print(f"{line}", file=output_handle)
-                    seen_lines.add(line)
+            output_mailmap(authors, output_handle)
         elif output_format == "pyproject":
-            print("authors = [", file=output_handle)
-            lines = set(
-                f'    {{name = "{author.name}", email = "{author.email}"}}' for author in authors
-            )
-            print(",\n".join(lines), file=output_handle)
-            print("]", file=output_handle)
+            output_pyproject(authors, output_handle)
         else:
-            for author in authors:
-                line = f"{author.name} <{author.email}>"
-                if line not in seen_lines:
-                    print(f"{line}", file=output_handle)
-                    seen_lines.add(line)
+            output_list(authors, output_handle)
 
 
 class AuthorsMain(cmd.Main):
+    """Print out authors in various formats."""
+
     def __init__(self):
         super().__init__()
         self.parser.add_argument(
@@ -328,9 +396,7 @@ class AuthorsMain(cmd.Main):
             default=False,
             help="Reverse the order",
         )
-        self.parser.add_argument(
-            "--file", dest="files", action="append", default=[], required=False
-        )
+        self.parser.add_argument("--file", dest="files", action="append", default=[], required=False)
         self.parser.add_argument(
             "--output",
             dest="output",
@@ -338,7 +404,8 @@ class AuthorsMain(cmd.Main):
             help="Write the output somewhere. Default: stdout",
         )
 
-    def main(self):
+    def main(self) -> None:
+        """Print the authors of this repo."""
         super().main()
         if self.args.verbose:
             easy_logging.easy_initialize_logging("DEBUG", sys.stderr)
@@ -347,26 +414,25 @@ class AuthorsMain(cmd.Main):
         logger.debug(self.args)
 
         from_sha = self.args.after or self.args.since
-        from_inclusive = from_sha is None or self.args.since is not None
+        from_inclusive = Inclusiveness.if_true(from_sha is None or self.args.since is not None)
         to_sha = self.args.until or self.args.through
-        to_inclusive = to_sha is None or self.args.through is not None
+        to_inclusive = Inclusiveness.if_true(to_sha is None or self.args.through is not None)
         files = self.args.files or []
         output = self.args.output or None
 
+        sha_range = ShaRange(from_sha, from_inclusive, to_sha, to_inclusive)
+        authors = extract_authors(sha_range, files)
         output_authors(
-            from_sha,
-            from_inclusive,
-            to_sha,
-            to_inclusive,
+            authors,
             self.args.format,
             self.args.ordering,
             self.args.reversed,
-            files,
             output,
         )
 
 
-def main():
+def main() -> None:
+    """Run the command."""
     AuthorsMain().main()
 
 
