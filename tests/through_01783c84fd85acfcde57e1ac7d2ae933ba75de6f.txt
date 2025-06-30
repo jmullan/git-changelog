@@ -39,16 +39,26 @@ Jesse Mullan
 - Only prepend v on the version line if the version starts with a number. Closes #1
 - Move tests to tests dir (so they run), fix mypy stuffs
 - Fix mypy
+
+# v1.2 (2024-02-12)
+
+Jesse Mullan
+
 - Update pyproject.toml and fix linting
+
+# v1.1 (2024-02-12)
+
+Jesse Mullan
+
 - Fix github action
 
-### 2024-01
+# v1.0 (2024-01-01)
 
 Jesse Mullan
 
 - working code
 
-### 2023-12
+# works (2023-12-15)
 
 Jesse Mullan
 

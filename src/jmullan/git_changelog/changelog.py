@@ -707,7 +707,7 @@ def all_ancestors(sha: str, commits_by_sha: dict[str, Commit]) -> set[str]:
     return found
 
 
-def is_ancestor(child_sha: str, possible_ancestor_sha: str, commits_by_sha: dict[str, Commit]):
+def is_ancestor(child_sha: str, possible_ancestor_sha: str, commits_by_sha: dict[str, Commit]) -> bool:
     """Find all sha ancestors from a given sha."""
     stack: list[str] = [child_sha]
     found = set()
@@ -742,9 +742,7 @@ def get_tag_graph(tags_by_sha: dict[str, Tag], commits_by_sha: dict[str, Commit]
         for possible_parent in tags_by_sha:
             if possible_parent not in ancestors:
                 ancestors[possible_parent] = []
-            if sha in ancestors[possible_parent]:
-                continue
-            if possible_parent in ancestors[sha]:
+            if sha in ancestors[possible_parent] or possible_parent in ancestors[sha]:
                 continue
             if is_ancestor(sha, possible_parent, commits_by_sha):
                 ancestors[sha].append(possible_parent)
