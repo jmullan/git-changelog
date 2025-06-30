@@ -707,11 +707,49 @@ def all_ancestors(sha: str, commits_by_sha: dict[str, Commit]) -> set[str]:
     return found
 
 
+def is_ancestor(child_sha: str, possible_ancestor_sha: str, commits_by_sha: dict[str, Commit]):
+    """Find all sha ancestors from a given sha."""
+    stack: list[str] = [child_sha]
+    found = set()
+    while stack:
+        sha = stack.pop()
+        if sha == possible_ancestor_sha:
+            return True
+        if sha in found:
+            continue
+        found.add(sha)
+        commit = commits_by_sha.get(sha)
+        if commit is None:
+            continue
+        parents = commit.parent_shas
+        if not parents:
+            continue
+        for parent in parents:
+            if parent == possible_ancestor_sha:
+                return True
+            if parent == sha or parent in found:
+                continue
+            stack.append(parent)
+    return False
+
+
 def get_tag_graph(tags_by_sha: dict[str, Tag], commits_by_sha: dict[str, Commit]) -> dict[str, list[str]]:
     """Build a graph of tags and their predecessors."""
     ancestors: dict[str, list[str]] = {}
     for sha in tags_by_sha:
-        ancestors[sha] = [a for a in all_ancestors(sha, commits_by_sha) if a in tags_by_sha and a != sha]
+        if sha not in ancestors:
+            ancestors[sha] = []
+        for possible_parent in tags_by_sha:
+            if possible_parent not in ancestors:
+                ancestors[possible_parent] = []
+            if sha in ancestors[possible_parent]:
+                continue
+            if possible_parent in ancestors[sha]:
+                continue
+            if is_ancestor(sha, possible_parent, commits_by_sha):
+                ancestors[sha].append(possible_parent)
+            elif is_ancestor(possible_parent, sha, commits_by_sha):
+                ancestors[possible_parent].append(sha)
     for sha, heritage in ancestors.items():
         # remove anything also included in parent heritages
         retained = set(heritage)
@@ -758,7 +796,7 @@ def build_commit_groups(
             commit_tags = commit.tag_names
             if not commit_tags:
                 for possible_tag_sha in ordered_tags:
-                    if sha in all_ancestors(possible_tag_sha, commits_by_sha):
+                    if is_ancestor(possible_tag_sha, sha, commits_by_sha):
                         tag = tags_by_sha[possible_tag_sha]
                         commit_tags = [tag.ref_name]
                         break
