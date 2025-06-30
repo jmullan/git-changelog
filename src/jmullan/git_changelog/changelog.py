@@ -1,7 +1,6 @@
 """Functions and classes to support building a CHANGELOG document."""
 
 import csv
-import enum
 import logging
 import os
 import pathlib
@@ -10,10 +9,12 @@ import shlex
 import subprocess
 import sys
 import textwrap
-import typing
 from collections.abc import Iterator
-from dataclasses import dataclass, field, fields
+from dataclasses import fields
 from typing import IO, TextIO, TypeGuard
+
+from jmullan.git_changelog.models import Commit, Direction, ShaRange, Tag, UseTags, Version
+from jmullan.git_changelog.text import fill_text, none_as_empty, none_as_empty_stripped, some_string
 
 logger = logging.getLogger(__name__)
 
@@ -76,75 +77,6 @@ LIST_CONTINUATION = "- "
 MIN_TICKET_FILE_ROW_LENGTH = 2
 
 
-B = typing.TypeVar("B", bound="BooleanEnum")
-
-
-class BooleanEnum(enum.Enum):
-    """Extend this to make simple two-value enums to replace boolean arguments."""
-
-    def __bool__(self):
-        """Cast me into a boolean."""
-        return bool(self.value)
-
-    @classmethod
-    def if_true(cls, true_false: bool) -> typing.Self:  # noqa: FBT001
-        """Build this enum from something truthy."""
-        for item in cls:
-            if bool(true_false) == bool(item.value):
-                return item
-        raise ValueError("Not a boolean")
-
-
-class Inclusiveness(BooleanEnum):
-    """Boolean-ish definitions."""
-
-    EXCLUSIVE = False
-    INCLUSIVE = True
-
-
-class UseTags(BooleanEnum):
-    """Boolean-ish definitions."""
-
-    FALSE = False
-    TRUE = True
-
-
-class Direction(enum.Enum):
-    """Boolean-ish definitions."""
-
-    REVERSE = enum.auto()
-    FORWARD = enum.auto()
-
-
-@dataclass
-class ShaRange:
-    """Holds a from, to, and whether to include each in the range."""
-
-    from_sha: str | None
-    from_inclusive: Inclusiveness
-    to_sha: str | None
-    to_inclusive: Inclusiveness
-
-
-def none_as_empty(string: str | None) -> str:
-    """Turn that None into an empty string or leave it alone."""
-    if string is None:
-        return ""
-    return string
-
-
-def none_as_empty_stripped(string: str | None) -> str:
-    """Turn Nones into empty strings, and strip other strings."""
-    return none_as_empty(string).strip()
-
-
-def some_string(string: str | None) -> TypeGuard[str]:
-    """Determine if the string is None or blank."""
-    if string is None:
-        return False
-    return len(string.strip()) > 0
-
-
 def load_tickets() -> dict[str, str]:
     """Try to load ticket data from a particular file."""
     environ_path = os.environ.get("JIRA_PATH")
@@ -169,188 +101,6 @@ def load_tickets() -> dict[str, str]:
                     continue
                 tickets[key] = description
     return tickets
-
-
-@dataclass
-class Tag:
-    """A named sha."""
-
-    sha_sha: str = field(metadata={"template": "%(*objectname):%(objectname)"})
-    ref_name: str = field(metadata={"template": "%(refname:short)"})
-    date: str = field(metadata={"template": "%(taggerdate:iso8601)"})
-    subject: str = field(metadata={"template": "%(subject)"})
-    body: str = field(metadata={"template": "%(body)"})
-
-    @property
-    def sha(self) -> str:
-        """Find the sha this tag points to."""
-        parts = self.sha_sha.split(":")
-        if len(parts[0]):
-            return parts[0]
-        return parts[1]
-
-    def is_annotated(self) -> bool:
-        """Check if this tag is annotated."""
-        return any(some_string(x) for x in [self.subject, self.body])
-
-
-@dataclass
-class Commit:
-    """The basic unit of a git log."""
-
-    sha: str = field(metadata={"template": "%H"})
-    date: str = field(metadata={"template": "%as"})
-    email: str = field(metadata={"template": "%aE"})
-    original_email: str = field(metadata={"template": "%ae"})
-    name: str = field(metadata={"template": "%aN"})
-    original_name: str = field(metadata={"template": "%an"})
-    refnames: str = field(metadata={"template": "%D"})
-    parents: str = field(metadata={"template": "%P"})
-    body: str = field(metadata={"template": "%B"})
-    notes: str = field(metadata={"template": "%N"})
-
-    additional_jiras: list[str] = field(default_factory=list)
-    likely_jiras: list[str] = field(default_factory=list)
-
-    @classmethod
-    def empty(cls) -> "Commit":
-        """Build a commit with nothing in it."""
-        return cls(
-            sha="",
-            date="",
-            email="",
-            original_email="",
-            name="",
-            original_name="",
-            refnames="",
-            parents="",
-            body="",
-            notes="",
-            additional_jiras=[],
-            likely_jiras=[],
-        )
-
-    @property
-    def parent_shas(self) -> list[str]:
-        """Get the parents of this commit."""
-        if self.parents is None:
-            return []
-        return self.parents.split(" ")
-
-    @property
-    def tag_names(self) -> list[str]:
-        """Find any tags associated with this commit."""
-        tag_names = []
-        refnames = none_as_empty_stripped(self.refnames)
-        if some_string(refnames):
-            refs = refnames.split(",")
-            for reference_name in refs:
-                stripped = reference_name.strip()
-                if stripped.startswith("tag: "):
-                    tag_names.append(stripped.removeprefix("tag: "))
-        return tag_names
-
-    @property
-    def heads(self) -> list[str]:
-        """Find any heads in this commit."""
-        heads = []
-        refnames = none_as_empty_stripped(self.refnames)
-        if refnames:
-            refs = refnames.split(",")
-            for reference_name in refs:
-                stripped_name = reference_name.strip()
-                if not stripped_name.startswith("tag: "):
-                    heads.append(stripped_name)
-        return heads
-
-    @property
-    def jiras(self) -> list[str]:
-        """Get all the possible jiras from a commit."""
-        return extract_jiras(self.body) + self.additional_jiras
-
-    def add_jiras(self, jiras: list[str]) -> None:
-        """Add jiras if they are provided."""
-        if jiras is not None:
-            self.additional_jiras.extend(jiras)
-
-    def add_likely_jiras(self, jiras: list[str]) -> None:
-        """Add likely jiras if they are provided."""
-        if jiras is not None:
-            self.likely_jiras.extend(jiras)
-
-    @property
-    def subject(self) -> str:
-        """Use the first non-empty line from the body as a subject."""
-        body = none_as_empty_stripped(self.body)
-        return body.split("\n", 1)[0]
-
-    @property
-    def description(self) -> str:
-        """Cut up the body and haruspice the description."""
-        body = none_as_empty_stripped(self.body)
-        body_parts = body.split("\n", 1)
-        if len(body_parts) > 1:
-            return body_parts[1]
-        return ""
-
-    @property
-    def clean_body(self) -> str:
-        """Cast out the impurities."""
-        body = none_as_empty(self.body).strip("\n")
-        lines = body.split("\n")
-        lines = [line.rstrip() for line in lines]
-        lines = [line.strip("\n") for line in lines]
-        lines = [line for line in lines if include_line(line)]
-        output = "\n".join(lines)
-        output = re.sub(r"\n+", "\n", output)
-        return output.strip("\n")
-
-    @property
-    def is_merge_to_main(self) -> bool:
-        """Look for evidence that this commit is a merge to main."""
-        return bool(re.search("Merge.*to (master|main)", self.body))
-
-    @property
-    def version(self) -> str | None:
-        """Look for likely version strings in a commit message."""
-        matches = re.search(r"pre tag commit.*'(.*)'", self.subject)
-        if matches:
-            return matches.group(1)
-        return None
-
-    @property
-    def month(self) -> str:
-        """Get the month from a commit."""
-        date = self.date
-        if date is not None:
-            return date[:7]
-        return ""
-
-    def is_likely_bot(self) -> bool:
-        """Determine if the committer looks like a bot."""
-        bots = ["dependabot", "sourcegraph.com", "githubactions-noreply", "jenkins"]
-        name_fields = {f.lower() for f in [self.original_email, self.original_name, self.email, self.name]}
-        for bot in bots:
-            for name_field in name_fields:
-                if bot in name_field:
-                    return True
-        return False
-
-
-@dataclass
-class Month:
-    """A month of the year and the commits that seem to live in it."""
-
-    name: str
-    commits: list
-
-
-@dataclass
-class Version:
-    """A supposed version and the commits it contains."""
-
-    version_name: str
-    commits: list[Commit]
 
 
 # git-for-each-ref doesn't have a -z option, so we manually add the null character
@@ -465,6 +215,18 @@ def format_body(body: str | None, jiras: list[str]) -> list[str]:
     return lines
 
 
+def clean_body(commit: Commit) -> str:
+    """Cast out the impurities."""
+    body = none_as_empty(commit.body).strip("\n")
+    lines = body.split("\n")
+    lines = [line.rstrip() for line in lines]
+    lines = [line.strip("\n") for line in lines]
+    lines = [line for line in lines if include_line(line)]
+    output = "\n".join(lines)
+    output = re.sub(r"\n+", "\n", output)
+    return output.strip("\n")
+
+
 def valid_name(name: str | None) -> TypeGuard[str]:
     """Filter out bot names."""
     name = none_as_empty_stripped(name)
@@ -517,32 +279,9 @@ def make_version_line(release_version: str, commits: list[Commit]) -> str:
     return ""
 
 
-def fill_text(text: str, width: int, indent: str, initial_indent: str | None = None) -> str:
-    """Strip any extra indentation, then reindent and then wrap each line individually."""
-    text = textwrap.dedent(text)
-    text = "\n".join(x.rstrip() for x in text.split("\n"))
-    text = text.strip("\n")
-    text = re.sub(r"\n\n\n+", "\n", text)
-
-    texts = text.splitlines()
-    if indent is not None and initial_indent is not None:
-        first_line = texts.pop(0)
-        first_line = textwrap.fill(first_line, width, initial_indent=initial_indent, subsequent_indent=indent)
-        texts = [
-            textwrap.fill(line, width, initial_indent=indent, subsequent_indent=indent) for line in texts
-        ]  # Wrap each line
-        return "\n".join([first_line, *texts])
-    if initial_indent is not None:
-        first_line = texts.pop(0)
-        first_line = textwrap.fill(first_line, width, initial_indent=initial_indent)
-        texts = [textwrap.fill(line, width) for line in texts]  # Wrap each line
-        return "\n".join([first_line, *texts])
-    if indent is not None:
-        texts = [
-            textwrap.fill(line, width, initial_indent=indent, subsequent_indent=indent) for line in texts
-        ]  # Wrap each line
-        return "\n".join(texts)
-    return "\n".join(textwrap.fill(line, width) for line in texts)
+def all_jiras(commit: Commit) -> list[str]:
+    """Get all the possible jiras from a commit."""
+    return extract_jiras(commit.body) + commit.additional_jiras
 
 
 def format_commit(commit: Commit) -> list[str]:
@@ -551,12 +290,12 @@ def format_commit(commit: Commit) -> list[str]:
     if not include_line(subject):
         return []
     commit_lines = []
-    subject_lines = format_body(subject, commit.jiras)
+    subject_lines = format_body(subject, all_jiras(commit))
     if subject_lines:
         commit_lines.extend(subject_lines)
     description = commit.description
     if some_string(description):
-        description_lines = format_body(description, commit.jiras)
+        description_lines = format_body(description, all_jiras(commit))
         if description_lines:
             for description_line in description_lines:
                 if description_line not in commit_lines:
@@ -666,7 +405,7 @@ def format_month_commits(month_commits: list[Commit], jiras_to_summaries: dict[s
     month_commit_lines = []
     commits_by_jiras: dict[str, list[Commit]] = {"": []}
     for commit in month_commits:
-        jiras = commit.jiras or []
+        jiras = all_jiras(commit) or []
         unique_jiras = {jira.strip() for jira in jiras if some_string(jira)}
         if not jiras:
             jira_string = ""
@@ -1053,20 +792,21 @@ def populate_jiras_from_parents(commits_by_sha: dict[str, Commit]) -> dict[str, 
             parent = commits_by_sha.get(parent_sha)
 
             if parent is not None:
-                shares_subject = commit.subject in parent.body
-
-                if not parent.jiras:
+                shares_subject = commit.subject in parent.body or parent.subject in commit.body
+                parent_jiras = all_jiras(parent)
+                commit_jiras = all_jiras(commit)
+                if not parent_jiras:
                     if commit.is_merge_to_main or shares_subject:
-                        logger.debug("adding %s from child %s to %s", commit.jiras, sha, parent_sha)
-                        parent.add_jiras(commit.jiras)
+                        logger.debug("adding %s from child %s to %s", commit_jiras, sha, parent_sha)
+                        parent.add_jiras(commit_jiras)
                     else:
-                        parent.add_likely_jiras(commit.jiras)
-                elif not commit.jiras:
-                    logger.debug("adding %s from parent %s to %s", commit.jiras, parent_sha, sha)
+                        parent.add_likely_jiras(commit_jiras)
+                elif not commit_jiras:
+                    logger.debug("adding %s from parent %s to %s", parent_jiras, parent_sha, sha)
                     if commit.is_merge_to_main or shares_subject:
-                        commit.add_jiras(parent.jiras)
+                        commit.add_jiras(parent_jiras)
                     else:
-                        commit.add_likely_jiras(parent.jiras)
+                        commit.add_likely_jiras(parent_jiras)
     return commits_by_sha
 
 

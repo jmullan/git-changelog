@@ -4,7 +4,7 @@ from dataclasses import MISSING, fields
 from pathlib import Path
 
 from jmullan.git_changelog import changelog
-from jmullan.git_changelog.changelog import Inclusiveness, ShaRange, UseTags
+from jmullan.git_changelog.models import Inclusiveness, ShaRange, UseTags
 
 logger = logging.getLogger(__name__)
 

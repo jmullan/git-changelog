@@ -4,7 +4,8 @@
 import logging
 import sys
 
-from jmullan.git_changelog.changelog import Inclusiveness, ShaRange, UseTags, print_changelog
+from jmullan.git_changelog.changelog import print_changelog
+from jmullan.git_changelog.models import Inclusiveness, ShaRange, UseTags
 from jmullan.logging import easy_logging
 
 from jmullan.cmd import cmd

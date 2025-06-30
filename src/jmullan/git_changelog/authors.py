@@ -10,7 +10,7 @@ import sys
 from typing import TextIO, TypeVar
 
 from jmullan.git_changelog import changelog
-from jmullan.git_changelog.changelog import Direction, Inclusiveness, ShaRange
+from jmullan.git_changelog.models import Direction, Inclusiveness, ShaRange
 from jmullan.logging import easy_logging
 
 from jmullan.cmd import cmd

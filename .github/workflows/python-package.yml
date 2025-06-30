@@ -39,3 +39,4 @@ jobs:
     - name: Demonstrate output
       run: |
         git-changelog
+        git-authors
