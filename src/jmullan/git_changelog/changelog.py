@@ -1,4 +1,3 @@
-#!/usr/bin/env python3.13
 """Functions and classes to support building a CHANGELOG document."""
 
 import csv
