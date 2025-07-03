@@ -58,7 +58,7 @@ only-include = ["src/jmullan/git_changelog"]
 
 [tool.hatch.envs.types]
 extra-dependencies = [
-  "mypy>=1.0.0",
+    "mypy>=1.0.0",
 ]
 
 [tool.hatch.metadata]
@@ -77,9 +77,9 @@ tests = ["tests", "*/jmullan/cmd/tests"]
 
 [tool.coverage.report]
 exclude_lines = [
-  "no cov",
-  "if __name__ == .__main__.:",
-  "if TYPE_CHECKING:",
+    "no cov",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
 ]
 
 [tool.mypy]
