@@ -4,6 +4,7 @@ import enum
 import logging
 import re
 import typing
+from collections import defaultdict
 from dataclasses import dataclass, field
 
 from jmullan.git_changelog.text import none_as_empty_stripped, some_string
@@ -66,7 +67,9 @@ class Tag:
 
     sha_sha: str = field(metadata={"template": "%(*objectname):%(objectname)"})
     ref_name: str = field(metadata={"template": "%(refname:short)"})
-    date: str = field(metadata={"template": "%(taggerdate:iso8601)"})
+    tagger_date: str = field(metadata={"template": "%(taggerdate:iso8601)"})
+    creator_date: str = field(metadata={"template": "%(creatordate:iso8601)"})
+    committer_date: str = field(metadata={"template": "%(committerdate:iso8601)"})
     subject: str = field(metadata={"template": "%(subject)"})
     body: str = field(metadata={"template": "%(body)"})
 
@@ -120,11 +123,12 @@ class Commit:
         )
 
     @property
-    def parent_shas(self) -> list[str]:
+    def parent_shas(self) -> set[str]:
         """Get the parents of this commit."""
         if self.parents is None:
-            return []
-        return self.parents.split(" ")
+            return set()
+        shas = [sha.strip() for sha in self.parents.split(" ")]
+        return set(sha for sha in shas if len(sha))
 
     @property
     def tag_names(self) -> list[str]:
@@ -223,3 +227,186 @@ class Version:
 
     version_name: str
     commits: list[Commit]
+    version_tags: dict[str, list[Tag]]
+
+
+class CommitTree:
+    def __init__(self, commits_by_sha: dict[str, Commit], tags_by_tag_name: dict[str, Tag]) -> None:
+        self.commits_by_sha = commits_by_sha
+        self.tags_by_tag_name = tags_by_tag_name
+        self.tags_by_sha: dict[str, list[Tag]] = defaultdict(list)
+
+        self.parents: dict[str, set[str]] = defaultdict(set)
+        self.children: dict[str, set[str]] = defaultdict(set)
+        self.chains: dict[str, Chain] = {}
+        self.generations: dict[str, int] = {}
+
+        for commit in self.commits_by_sha.values():
+            if commit.sha not in self.generations:
+                self.generations[commit.sha] = 1
+            for parent_sha in commit.parent_shas:
+                if parent_sha not in self.generations:
+                    self.generations[parent_sha] = 1
+                self.generations[commit.sha] = max(self.generations[parent_sha] + 1, self.generations[commit.sha])
+                self.parents[commit.sha].add(parent_sha)
+                self.children[parent_sha].add(commit.sha)
+        for sha in self.commits_by_sha.keys():
+            if sha in self.chains:
+                continue
+            sha_chain = self.walk_chain(sha)
+            chain = Chain(self.children)
+            for chain_sha in sha_chain:
+                chain.add(commits_by_sha[sha])
+                self.chains[chain_sha] = chain
+
+        found = True
+        while found:
+            found = False
+            for sha in self.commits_by_sha.keys():
+                for child_sha in self.children[sha]:
+                    if self.generations[child_sha] <= self.generations[sha]:
+                        found = True
+                        self.generations[child_sha] = self.generations[sha] + 1
+
+        for tag in tags_by_tag_name.values():
+            self.tags_by_sha[tag.sha].append(tag)
+
+        self.tag_graph = self.build_tag_graph()
+        self.ordered_tags = self.order_tags()
+
+    def walk_chain(self, sha: str) -> list[str]:
+        shas = [sha]
+        while True:
+            parents = self.parents[sha]
+            if len(parents) != 1:
+                break
+            parent = list(parents)[0]
+            siblings = self.children[parent]
+            if len(siblings) != 1:
+                break
+            sha = parent
+        shas = list(reversed(shas))
+        sha = shas[-1]
+        while True:
+            children = self.children[sha]
+            if len(children) != 1:
+                break
+            child = list(children)[0]
+            siblings = self.parents[child]
+            if len(siblings) != 1:
+                break
+            shas.append(child)
+            sha = child
+        return shas
+
+    def is_ancestor(self, child_sha: str, possible_ancestor_sha: str) -> bool:
+        """Find all sha ancestors from a given sha."""
+        stack: list[str] = [child_sha]
+        found = set()
+        while stack:
+            sha = stack.pop()
+            if sha == possible_ancestor_sha:
+                return True
+            if sha in found:
+                continue
+            found.add(sha)
+            parents = self.parents.get(sha)
+            if not parents:
+                continue
+            for parent in parents:
+                if parent == possible_ancestor_sha:
+                    return True
+                if parent == sha or parent in found:
+                    continue
+                stack.append(parent)
+        return False
+
+    def build_tag_graph(self) -> dict[str, set[str]]:
+        """Build a graph of tags and their predecessors."""
+        ancestors: dict[str, set[str]] = defaultdict(set)
+        for sha, tags in self.tags_by_sha.items():
+            for possible_parent in self.tags_by_sha[sha]:
+                possible_parent_sha = possible_parent.sha
+                if sha in ancestors[possible_parent_sha] or possible_parent_sha in ancestors[sha]:
+                    continue
+                if self.is_ancestor(sha, possible_parent_sha):
+                    ancestors[sha].add(possible_parent_sha)
+                elif self.is_ancestor(possible_parent_sha, sha):
+                    ancestors[possible_parent_sha].add(sha)
+        for sha, heritage in ancestors.items():
+            # remove anything also included in parent heritages
+            retained = set(heritage)
+            for item in heritage:
+                retained = retained - set(ancestors[item])
+            ancestors[sha] = retained
+
+        return ancestors
+
+    def order_tags(self) -> list[str]:
+        """Build a list of tags ordered by their hierarchy and commit date."""
+        ordered_tags = []
+        seen_tag_shas: set[str] = set()
+        tags_to_check = list(self.tag_graph.keys())
+        while tags_to_check:
+            leaves = [sha for sha in tags_to_check if
+                      not set(self.tag_graph[sha]) - seen_tag_shas]
+            for leaf in leaves:
+                tags_to_check.remove(leaf)
+                seen_tag_shas.add(leaf)
+            ordered_tags.extend(sorted(leaves, key=self.get_sha_date))
+        return ordered_tags
+
+    def get_sha_date(self, sha: str) -> str:
+        dates = []
+        commit = self.commits_by_sha.get(sha)
+        if commit:
+            commit_date = commit.date
+            if commit_date:
+                dates.append(commit_date)
+        tags = self.tags_by_sha[sha]
+        for tag in tags:
+            dates.append(tag.tagger_date)
+            dates.append(tag.committer_date)
+            dates.append(tag.creator_date)
+        dates.append("The future")
+        return min(date for date in dates if date is not None and len(date))
+
+
+class Chain:
+    def __init__(self, children: dict[str, set[str]]):
+        self._children = children
+        self.commits: list[Commit] = []
+        self.seen: set[str] = set()
+
+    def add(self, commit: Commit) -> None:
+        if commit.sha not in self.seen:
+            self.commits.append(commit)
+            self.seen.add(commit.sha)
+
+    def parents(self) -> set[str]:
+        first = self.first()
+        return (first and first.parent_shas) or set()
+
+    def children(self) -> set[str]:
+        last = self.last()
+        return (last and self._children.get(last.sha)) or set()
+
+    def first(self) -> Commit | None:
+        if self.commits:
+            return self.commits[0]
+        return None
+
+    def last(self) -> Commit | None:
+        if self.commits:
+            return self.commits[-1]
+        return None
+
+    def __contains__(self, item: Commit | str | None) -> bool:
+        """Determine if the commit or commit sha is in the chain."""
+        match item:
+            case Commit() as x:
+                return x.sha in self.seen
+            case str() as x:
+                return x in self.seen
+            case _:
+                return False

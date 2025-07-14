@@ -13,7 +13,8 @@ from collections.abc import Iterator
 from dataclasses import fields
 from typing import IO, TextIO, TypeGuard
 
-from jmullan.git_changelog.models import Commit, Direction, ShaRange, Tag, UseTags, Version
+from jmullan.git_changelog.models import Commit, Direction, ShaRange, Tag, \
+    UseTags, Version, CommitTree
 from jmullan.git_changelog.text import fill_text, none_as_empty, none_as_empty_stripped, some_string
 
 logger = logging.getLogger(__name__)
@@ -279,7 +280,7 @@ def make_version_line(release_version: str, commits: list[Commit]) -> str:
     return ""
 
 
-def all_jiras(commit: Commit) -> list[str]:
+def all_tickets(commit: Commit) -> list[str]:
     """Get all the possible jiras from a commit."""
     return extract_jiras(commit.body) + commit.additional_jiras
 
@@ -290,12 +291,12 @@ def format_commit(commit: Commit) -> list[str]:
     if not include_line(subject):
         return []
     commit_lines = []
-    subject_lines = format_body(subject, all_jiras(commit))
+    subject_lines = format_body(subject, all_tickets(commit))
     if subject_lines:
         commit_lines.extend(subject_lines)
     description = commit.description
     if some_string(description):
-        description_lines = format_body(description, all_jiras(commit))
+        description_lines = format_body(description, all_tickets(commit))
         if description_lines:
             for description_line in description_lines:
                 if description_line not in commit_lines:
@@ -338,10 +339,10 @@ def format_annotated_tag(tag: Tag) -> str | None:
     return f"{tag_body}"
 
 
-def fill_body(jira_string: str, summary_string: str, body: str, list_prefix: str) -> str:
+def fill_body(ticket_string: str, summary_string: str, body: str, list_prefix: str) -> str:
     """Build the full body from possible strings."""
-    if jira_string or summary_string:
-        not_body = fill_text(f"{jira_string} {summary_string}".strip(), DEFAULT_WIDTH, "    ", initial_indent="")
+    if ticket_string or summary_string:
+        not_body = fill_text(f"{ticket_string} {summary_string}".strip(), DEFAULT_WIDTH, "    ", initial_indent="")
     else:
         not_body = ""
 
@@ -370,55 +371,56 @@ def smoosh_commits_into_body(commits: list[Commit]) -> str:
     return "\n".join(lines).strip()
 
 
-def format_jira_commits(commits: list[Commit], jira_string: str | None, jiras_to_summaries: dict[str, str]) -> str:
+def format_ticket_commits(commits: list[Commit], ticket_string: str | None, tickets_to_summaries: dict[str, str]) -> str:
     """Turn jiras and their commits into a string."""
     body = smoosh_commits_into_body(commits)
 
-    if not some_string(jira_string):
+    if not some_string(ticket_string):
         return fill_text(body, DEFAULT_WIDTH, LIST_CONTINUATION, LIST_PREFIX)
 
-    jiras = [jira.strip() for jira in jira_string.split(",")]
+    tickets = [ticket.strip() for ticket in ticket_string.split(",")]
     summary_string = ""
-    jiras_with_summaries = []
-    if len(jiras) > 0:
-        jiras_with_summaries = [
-            f"+ {jira}: {jiras_to_summaries[jira]}" for jira in jiras if jiras_to_summaries.get(jira)
+    tickets_with_summaries = []
+    if len(tickets) > 0:
+        tickets_with_summaries = [
+            f"+ {ticket}: {tickets_to_summaries[ticket]}" for ticket in tickets if tickets_to_summaries.get(ticket)
         ]
-        jiras_without_summaries = [jira for jira in jiras if jira not in jiras_to_summaries]
-        if len(jiras_with_summaries) > 0:
-            summary_string = "\n".join(jiras_with_summaries)
+        jiras_without_summaries = [ticket for ticket in tickets if ticket not in tickets_to_summaries]
+        if len(tickets_with_summaries) > 0:
+            summary_string = "\n".join(tickets_with_summaries)
             if jiras_without_summaries:
-                jira_string = ", ".join(jiras_without_summaries)
+                ticket_string = ", ".join(jiras_without_summaries)
             else:
-                jira_string = ""
-    if jira_string:
-        jira_string = f"{jira_string}:"
-    if jiras_with_summaries:
+                ticket_string = ""
+    if ticket_string:
+        ticket_string = f"{ticket_string}:"
+    if tickets_with_summaries:
         list_prefix = f"    {LIST_PREFIX}"
     else:
         list_prefix = LIST_PREFIX
-    return fill_body(jira_string, summary_string, body, list_prefix)
+    return fill_body(ticket_string, summary_string, body, list_prefix)
 
 
-def format_month_commits(month_commits: list[Commit], jiras_to_summaries: dict[str, str]) -> list[str]:
+def format_month_commits(month_commits: list[Commit], tickets_to_summaries: dict[str, str]) -> list[str]:
     """Turn a month and its commits into a list of strings."""
+
     month_commit_lines = []
-    commits_by_jiras: dict[str, list[Commit]] = {"": []}
+    commits_by_ticket: dict[str, list[Commit]] = {"": []}
     for commit in month_commits:
-        jiras = all_jiras(commit) or []
-        unique_jiras = {jira.strip() for jira in jiras if some_string(jira)}
-        if not jiras:
-            jira_string = ""
+        tickets = all_tickets(commit) or []
+        unique_tickets = {ticket.strip() for ticket in tickets if some_string(ticket)}
+        if not tickets:
+            ticket_string = ""
         else:
-            jira_string = ", ".join(sorted(unique_jiras))
-        if jira_string not in commits_by_jiras:
-            commits_by_jiras[jira_string] = []
-        commits_by_jiras[jira_string].append(commit)
-    for jira_string, commits in commits_by_jiras.items():
-        jira_commits_body = format_jira_commits(commits, jira_string, jiras_to_summaries)
-        if jira_commits_body:
+            ticket_string = ", ".join(sorted(unique_tickets))
+        if ticket_string not in commits_by_ticket:
+            commits_by_ticket[ticket_string] = []
+        commits_by_ticket[ticket_string].append(commit)
+    for ticket_string, commits in commits_by_ticket.items():
+        ticket_commits_body = format_ticket_commits(commits, ticket_string, tickets_to_summaries)
+        if ticket_commits_body:
             month_commit_lines.append("")
-            month_commit_lines.extend(jira_commits_body.split("\n"))
+            month_commit_lines.extend(ticket_commits_body.split("\n"))
     return month_commit_lines
 
 
@@ -484,6 +486,7 @@ def build_month_commit_lines(
     month: str, month_commits: list[Commit], version_line: str, jiras_to_summaries: dict[str, str]
 ) -> list[str]:
     """Build a new month section."""
+
     tags_notes = []
     if month not in version_line:
         tags_notes.append("")
@@ -733,88 +736,44 @@ def is_ancestor(child_sha: str, possible_ancestor_sha: str, commits_by_sha: dict
     return False
 
 
-def get_tag_graph(tags_by_sha: dict[str, Tag], commits_by_sha: dict[str, Commit]) -> dict[str, list[str]]:
-    """Build a graph of tags and their predecessors."""
-    ancestors: dict[str, list[str]] = {}
-    for sha in tags_by_sha:
-        if sha not in ancestors:
-            ancestors[sha] = []
-        for possible_parent in tags_by_sha:
-            if possible_parent not in ancestors:
-                ancestors[possible_parent] = []
-            if sha in ancestors[possible_parent] or possible_parent in ancestors[sha]:
-                continue
-            if is_ancestor(sha, possible_parent, commits_by_sha):
-                ancestors[sha].append(possible_parent)
-            elif is_ancestor(possible_parent, sha, commits_by_sha):
-                ancestors[possible_parent].append(sha)
-    for sha, heritage in ancestors.items():
-        # remove anything also included in parent heritages
-        retained = set(heritage)
-        for item in heritage:
-            retained = retained - set(ancestors[item])
-        ancestors[sha] = list(retained)
-
-    return {x: list(y) for x, y in ancestors.items()}
-
-
-def order_tags(use_tags: UseTags, tags_by_sha: dict[str, Tag], commits_by_sha: dict[str, Commit]) -> list[str]:
-    """Build a list of tags ordered by their heirarchy and commit date."""
-    if use_tags != UseTags.TRUE:
-        return []
-    tag_tree = get_tag_graph(tags_by_sha, commits_by_sha)
-    ordered_tags = []
-    seen_tag_shas: set[str] = set()
-    tags_to_check = list(tag_tree.keys())
-    while tags_to_check:
-        leaves = [sha for sha in tags_to_check if not set(tag_tree[sha]) - seen_tag_shas]
-        for leaf in leaves:
-            tags_to_check.remove(leaf)
-            seen_tag_shas.add(leaf)
-        ordered_tags.extend(sorted(leaves, key=lambda sha: (commits_by_sha.get(sha) or tags_by_sha[sha]).date))
-    return ordered_tags
-
-
-def build_commit_groups(
+def build_versions(
     version: str | None,
-    commits_by_sha: dict,
     use_tags: UseTags,
-    ordered_tags: list[str],
-    tags_by_sha: dict[str, Tag],
-) -> dict[str, list[Commit]]:
+    commit_tree: CommitTree,
+) -> list[Version]:
     """Group commits / shas by version-ish name."""
     version_tree: dict[str, list[Commit]] = {}
     found_version = False
-    for sha, commit in commits_by_sha.items():
+    version_tags: dict[str, list[Tag]] = {}
+    for sha, commit in commit_tree.commits_by_sha.items():
         group_name = version or "Unknown"
         if commit.version:
             group_name = commit.version
             found_version = True
         elif use_tags:
             commit_tags = commit.tag_names
+            tags = []
             if not commit_tags:
-                for possible_tag_sha in ordered_tags:
-                    if is_ancestor(possible_tag_sha, sha, commits_by_sha):
-                        tag = tags_by_sha[possible_tag_sha]
-                        commit_tags = [tag.ref_name]
+                for possible_tag_sha in commit_tree.ordered_tags:
+                    if commit_tree.is_ancestor(possible_tag_sha, sha):
+                        tags = commit_tree.tags_by_sha[possible_tag_sha]
+                        commit_tags = [tag.ref_name for tag in tags]
                         break
             if commit_tags:
                 candidate_version = tags_to_release_version(commit_tags, found_version)
                 if candidate_version:
                     group_name = candidate_version
+                version_tags[group_name] = tags
+
         if group_name not in version_tree:
             version_tree[group_name] = []
         version_tree[group_name].append(commit)
-    return version_tree
 
-
-def build_versions(commit_groups: dict[str, list[Commit]]) -> list[Version]:
-    """Build version names from commit groups."""
     versions: list[Version] = []
-    for group_name, commits in commit_groups.items():
+    for group_name, commits in version_tree.items():
         if not commits:
             continue
-        group_version = Version(group_name, commits)
+        group_version = Version(group_name, commits, version_tags.get(group_name))
         versions.append(group_version)
     return versions
 
@@ -829,8 +788,8 @@ def populate_jiras_from_parents(commits_by_sha: dict[str, Commit]) -> dict[str, 
 
             if parent is not None:
                 shares_subject = commit.subject in parent.body or parent.subject in commit.body
-                parent_jiras = all_jiras(parent)
-                commit_jiras = all_jiras(commit)
+                parent_jiras = all_tickets(parent)
+                commit_jiras = all_tickets(commit)
                 if not parent_jiras:
                     if commit.is_merge_to_main or shares_subject:
                         logger.debug("adding %s from child %s to %s", commit_jiras, sha, parent_sha)
@@ -856,31 +815,22 @@ def print_changelog(
     """Print a nice changelog for the repo."""
     if out is None:
         out = sys.stdout
-    tags_by_tag_name = git_tags()
-    jiras_to_summaries = load_tickets()
-
     commits_by_sha = git_commits_by_sha(sha_range, Direction.FORWARD, files=files)
+    tags_by_tag_name = git_tags()
+    tickets_to_summaries = load_tickets()
+    commit_tree = CommitTree(commits_by_sha, tags_by_tag_name)
 
-    commits_by_sha = populate_jiras_from_parents(commits_by_sha)
-
-    tags_by_sha = {tag.sha: tag for tag in tags_by_tag_name.values()}
-
-    ordered_tags = order_tags(use_tags, tags_by_sha, commits_by_sha)
-
-    commit_groups = build_commit_groups(
+    versions = build_versions(
         version,
-        commits_by_sha,
         use_tags,
-        ordered_tags,
-        tags_by_sha,
+        commit_tree
     )
-    versions = build_versions(commit_groups)
 
     changes = []
     for group_version in versions:
         if not group_version.commits:
             continue
-        notes = make_notes(group_version, tags_by_tag_name, jiras_to_summaries)
+        notes = make_notes(group_version, tags_by_tag_name, tickets_to_summaries)
         if notes:
             changes.append(notes)
     if changes:
