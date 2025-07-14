@@ -121,7 +121,7 @@ def test_print_changelog():
         expected = f.read()
     assert content is not None
     assert len(content)
-    assert content == expected
+    assert expected == content
 
 
 def test_format_body():

@@ -13,8 +13,7 @@ from collections.abc import Iterator
 from dataclasses import fields
 from typing import IO, TextIO, TypeGuard
 
-from jmullan.git_changelog.models import Commit, Direction, ShaRange, Tag, \
-    UseTags, Version, CommitTree
+from jmullan.git_changelog.models import Commit, CommitTree, Direction, ShaRange, Tag, UseTags, Version
 from jmullan.git_changelog.text import fill_text, none_as_empty, none_as_empty_stripped, some_string
 
 logger = logging.getLogger(__name__)
@@ -371,7 +370,9 @@ def smoosh_commits_into_body(commits: list[Commit]) -> str:
     return "\n".join(lines).strip()
 
 
-def format_ticket_commits(commits: list[Commit], ticket_string: str | None, tickets_to_summaries: dict[str, str]) -> str:
+def format_ticket_commits(
+    commits: list[Commit], ticket_string: str | None, tickets_to_summaries: dict[str, str]
+) -> str:
     """Turn jiras and their commits into a string."""
     body = smoosh_commits_into_body(commits)
 
@@ -403,7 +404,6 @@ def format_ticket_commits(commits: list[Commit], ticket_string: str | None, tick
 
 def format_month_commits(month_commits: list[Commit], tickets_to_summaries: dict[str, str]) -> list[str]:
     """Turn a month and its commits into a list of strings."""
-
     month_commit_lines = []
     commits_by_ticket: dict[str, list[Commit]] = {"": []}
     for commit in month_commits:
@@ -434,11 +434,16 @@ def build_tags_by_format(version: Version) -> dict[str, list[str]]:
     return tags_by_format
 
 
-def build_months_by_tag(version: Version) -> dict[str, dict[str, list[Commit]]]:
+def build_months_by_tag(
+    version: Version,
+) -> dict[str, dict[str, list[Commit]]]:
     """Group a version's tag's commits into months."""
     months_by_tag: dict[str, dict[str, list[Commit]]] = {}
     current_tag = ""
     for commit in version.commits:
+        maybe_tags = format_tag_names(commit.tag_names)
+        if some_string(maybe_tags):
+            current_tag = maybe_tags
         current_month = commit.month
         if current_tag not in months_by_tag:
             months_by_tag[current_tag] = {}
@@ -486,7 +491,6 @@ def build_month_commit_lines(
     month: str, month_commits: list[Commit], version_line: str, jiras_to_summaries: dict[str, str]
 ) -> list[str]:
     """Build a new month section."""
-
     tags_notes = []
     if month not in version_line:
         tags_notes.append("")
@@ -514,7 +518,7 @@ def prune_heads(heads: list[str]) -> list[str]:
 def extract_refs(commit: Commit) -> dict[str, list[str]]:
     """Find any refs in a commit."""
     sha = commit.sha
-    parent_shas = commit.parent_shas or []
+    parent_shas: list[str] = commit.parent_shas or []
     heads = commit.heads or []
     heads = prune_heads(heads)
     shas_to_refs = {sha: heads}
@@ -559,15 +563,15 @@ def chunk_command(args: list[str]) -> Iterator[str]:
         yield from stream_chunks(proc.stdout, "\x00")
 
 
-def git_tags() -> dict[str, Tag]:
+def get_tags_by_tag_name() -> dict[str, Tag]:
     """Find all the tags in the repo."""
     command = ["git", "for-each-ref", f"--format={GIT_TAG_FORMAT}", "refs/tags"]
-    tags_by_tag: dict[str, Tag] = {}
+    tags_by_tag_name: dict[str, Tag] = {}
     for chunk in chunk_command(command):
         tag = chunk_to_tag(chunk)
         if tag is not None:
-            tags_by_tag[tag.ref_name] = tag
-    return tags_by_tag
+            tags_by_tag_name[tag.ref_name] = tag
+    return tags_by_tag_name
 
 
 def git_log(
@@ -736,6 +740,19 @@ def is_ancestor(child_sha: str, possible_ancestor_sha: str, commits_by_sha: dict
     return False
 
 
+def get_commit_tags(commit: Commit, commit_tree: CommitTree) -> tuple[list[Tag], list[str]]:
+    """Find tags that apply to a commit."""
+    tags = []
+    commit_tags = commit.tag_names or []
+    if not commit_tags:
+        for possible_tag_sha in commit_tree.ordered_tags:
+            if commit_tree.is_ancestor(possible_tag_sha, commit.sha):
+                tags = commit_tree.tags_by_sha[possible_tag_sha]
+                commit_tags = [tag.ref_name for tag in tags]
+                break
+    return tags, commit_tags
+
+
 def build_versions(
     version: str | None,
     use_tags: UseTags,
@@ -745,20 +762,13 @@ def build_versions(
     version_tree: dict[str, list[Commit]] = {}
     found_version = False
     version_tags: dict[str, list[Tag]] = {}
-    for sha, commit in commit_tree.commits_by_sha.items():
+    for commit in commit_tree.commits_by_sha.values():
         group_name = version or "Unknown"
         if commit.version:
             group_name = commit.version
             found_version = True
         elif use_tags:
-            commit_tags = commit.tag_names
-            tags = []
-            if not commit_tags:
-                for possible_tag_sha in commit_tree.ordered_tags:
-                    if commit_tree.is_ancestor(possible_tag_sha, sha):
-                        tags = commit_tree.tags_by_sha[possible_tag_sha]
-                        commit_tags = [tag.ref_name for tag in tags]
-                        break
+            tags, commit_tags = get_commit_tags(commit, commit_tree)
             if commit_tags:
                 candidate_version = tags_to_release_version(commit_tags, found_version)
                 if candidate_version:
@@ -773,7 +783,7 @@ def build_versions(
     for group_name, commits in version_tree.items():
         if not commits:
             continue
-        group_version = Version(group_name, commits, version_tags.get(group_name))
+        group_version = Version(group_name, commits, version_tags.get(group_name) or [])
         versions.append(group_version)
     return versions
 
@@ -816,15 +826,11 @@ def print_changelog(
     if out is None:
         out = sys.stdout
     commits_by_sha = git_commits_by_sha(sha_range, Direction.FORWARD, files=files)
-    tags_by_tag_name = git_tags()
+    tags_by_tag_name = get_tags_by_tag_name()
     tickets_to_summaries = load_tickets()
     commit_tree = CommitTree(commits_by_sha, tags_by_tag_name)
 
-    versions = build_versions(
-        version,
-        use_tags,
-        commit_tree
-    )
+    versions = build_versions(version, use_tags, commit_tree)
 
     changes = []
     for group_version in versions:

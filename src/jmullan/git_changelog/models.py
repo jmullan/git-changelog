@@ -123,12 +123,13 @@ class Commit:
         )
 
     @property
-    def parent_shas(self) -> set[str]:
+    def parent_shas(self) -> list[str]:
         """Get the parents of this commit."""
         if self.parents is None:
-            return set()
-        shas = [sha.strip() for sha in self.parents.split(" ")]
-        return set(sha for sha in shas if len(sha))
+            return []
+        # use a dictionary's keys as an ordered set
+        shas = {sha.strip(): True for sha in self.parents.split(" ")}
+        return list(shas.keys())
 
     @property
     def tag_names(self) -> list[str]:
@@ -227,10 +228,12 @@ class Version:
 
     version_name: str
     commits: list[Commit]
-    version_tags: dict[str, list[Tag]]
+    version_tags: list[Tag]
 
 
 class CommitTree:
+    """Builds information about the entire commit tree."""
+
     def __init__(self, commits_by_sha: dict[str, Commit], tags_by_tag_name: dict[str, Tag]) -> None:
         self.commits_by_sha = commits_by_sha
         self.tags_by_tag_name = tags_by_tag_name
@@ -241,6 +244,7 @@ class CommitTree:
         self.chains: dict[str, Chain] = {}
         self.generations: dict[str, int] = {}
 
+        self._build_chains()
         for commit in self.commits_by_sha.values():
             if commit.sha not in self.generations:
                 self.generations[commit.sha] = 1
@@ -250,23 +254,8 @@ class CommitTree:
                 self.generations[commit.sha] = max(self.generations[parent_sha] + 1, self.generations[commit.sha])
                 self.parents[commit.sha].add(parent_sha)
                 self.children[parent_sha].add(commit.sha)
-        for sha in self.commits_by_sha.keys():
-            if sha in self.chains:
-                continue
-            sha_chain = self.walk_chain(sha)
-            chain = Chain(self.children)
-            for chain_sha in sha_chain:
-                chain.add(commits_by_sha[sha])
-                self.chains[chain_sha] = chain
 
-        found = True
-        while found:
-            found = False
-            for sha in self.commits_by_sha.keys():
-                for child_sha in self.children[sha]:
-                    if self.generations[child_sha] <= self.generations[sha]:
-                        found = True
-                        self.generations[child_sha] = self.generations[sha] + 1
+        self._complete_generations()
 
         for tag in tags_by_tag_name.values():
             self.tags_by_sha[tag.sha].append(tag)
@@ -274,24 +263,47 @@ class CommitTree:
         self.tag_graph = self.build_tag_graph()
         self.ordered_tags = self.order_tags()
 
+    def _build_chains(self) -> None:
+        """Build chains during setup."""
+        for sha in self.commits_by_sha:
+            if sha in self.chains:
+                continue
+            sha_chain = self.walk_chain(sha)
+            chain = Chain(self.children)
+            for chain_sha in sha_chain:
+                chain.add(self.commits_by_sha[sha])
+                self.chains[chain_sha] = chain
+
+    def _complete_generations(self) -> None:
+        """Fill in missing generation information."""
+        found = True
+        while found:
+            found = False
+            for sha in self.commits_by_sha:
+                for child_sha in self.children[sha]:
+                    if self.generations[child_sha] <= self.generations[sha]:
+                        found = True
+                        self.generations[child_sha] = self.generations[sha] + 1
+
     def walk_chain(self, sha: str) -> list[str]:
+        """Find all shas connected to the start sha by single links."""
         shas = [sha]
         while True:
             parents = self.parents[sha]
             if len(parents) != 1:
                 break
-            parent = list(parents)[0]
+            parent = next(iter(parents))
             siblings = self.children[parent]
             if len(siblings) != 1:
                 break
             sha = parent
-        shas = list(reversed(shas))
+        shas.reverse()
         sha = shas[-1]
         while True:
             children = self.children[sha]
             if len(children) != 1:
                 break
-            child = list(children)[0]
+            child = next(iter(children))
             siblings = self.parents[child]
             if len(siblings) != 1:
                 break
@@ -325,7 +337,7 @@ class CommitTree:
         """Build a graph of tags and their predecessors."""
         ancestors: dict[str, set[str]] = defaultdict(set)
         for sha, tags in self.tags_by_sha.items():
-            for possible_parent in self.tags_by_sha[sha]:
+            for possible_parent in tags:
                 possible_parent_sha = possible_parent.sha
                 if sha in ancestors[possible_parent_sha] or possible_parent_sha in ancestors[sha]:
                     continue
@@ -348,8 +360,7 @@ class CommitTree:
         seen_tag_shas: set[str] = set()
         tags_to_check = list(self.tag_graph.keys())
         while tags_to_check:
-            leaves = [sha for sha in tags_to_check if
-                      not set(self.tag_graph[sha]) - seen_tag_shas]
+            leaves = [sha for sha in tags_to_check if not set(self.tag_graph[sha]) - seen_tag_shas]
             for leaf in leaves:
                 tags_to_check.remove(leaf)
                 seen_tag_shas.add(leaf)
@@ -357,6 +368,7 @@ class CommitTree:
         return ordered_tags
 
     def get_sha_date(self, sha: str) -> str:
+        """Find the best-ish date for a given sha."""
         dates = []
         commit = self.commits_by_sha.get(sha)
         if commit:
@@ -373,30 +385,37 @@ class CommitTree:
 
 
 class Chain:
+    """A series of commits that are connected by single paths."""
+
     def __init__(self, children: dict[str, set[str]]):
         self._children = children
         self.commits: list[Commit] = []
         self.seen: set[str] = set()
 
     def add(self, commit: Commit) -> None:
+        """Add a commit to the end of the chain."""
         if commit.sha not in self.seen:
             self.commits.append(commit)
             self.seen.add(commit.sha)
 
-    def parents(self) -> set[str]:
+    def parents(self) -> list[str]:
+        """Find the parents of the first commit in the chain."""
         first = self.first()
-        return (first and first.parent_shas) or set()
+        return (first and first.parent_shas) or []
 
     def children(self) -> set[str]:
+        """Find the children of the last commit in the chain."""
         last = self.last()
         return (last and self._children.get(last.sha)) or set()
 
     def first(self) -> Commit | None:
+        """Find the first commit in a chain of commits."""
         if self.commits:
             return self.commits[0]
         return None
 
     def last(self) -> Commit | None:
+        """Find the last commit in a chain of commits."""
         if self.commits:
             return self.commits[-1]
         return None
