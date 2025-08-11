@@ -50,7 +50,7 @@ class ChangeLogMain(cmd.Main):
             help="Use tags and other found versions",
         )
         self.parser.add_argument("--file", dest="files", action="append", default=[], required=False)
-        self.parser.add_argument("CURRENT_VERSION", default="Current", nargs="?")
+        self.parser.add_argument("version", metavar="CURRENT_VERSION", default="Current", nargs="?")
 
     def setup(self) -> None:
         """Configure logging."""
