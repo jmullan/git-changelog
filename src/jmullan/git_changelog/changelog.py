@@ -745,11 +745,8 @@ def get_commit_tags(commit: Commit, commit_tree: CommitTree) -> tuple[list[Tag],
     tags = []
     commit_tags = commit.tag_names or []
     if not commit_tags:
-        for possible_tag_sha in commit_tree.ordered_tags:
-            if commit_tree.is_ancestor(possible_tag_sha, commit.sha):
-                tags = commit_tree.tags_by_sha[possible_tag_sha]
-                commit_tags = [tag.ref_name for tag in tags]
-                break
+        tags = commit_tree.get_closest_tags(commit.sha)
+        commit_tags = [tag.ref_name for tag in tags]
     return tags, commit_tags
 
 

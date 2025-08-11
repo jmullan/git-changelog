@@ -231,159 +231,6 @@ class Version:
     version_tags: list[Tag]
 
 
-class CommitTree:
-    """Builds information about the entire commit tree."""
-
-    def __init__(self, commits_by_sha: dict[str, Commit], tags_by_tag_name: dict[str, Tag]) -> None:
-        self.commits_by_sha = commits_by_sha
-        self.tags_by_tag_name = tags_by_tag_name
-        self.tags_by_sha: dict[str, list[Tag]] = defaultdict(list)
-
-        self.parents: dict[str, set[str]] = defaultdict(set)
-        self.children: dict[str, set[str]] = defaultdict(set)
-        self.chains: dict[str, Chain] = {}
-        self.generations: dict[str, int] = {}
-
-        self._build_chains()
-        for commit in self.commits_by_sha.values():
-            if commit.sha not in self.generations:
-                self.generations[commit.sha] = 1
-            for parent_sha in commit.parent_shas:
-                if parent_sha not in self.generations:
-                    self.generations[parent_sha] = 1
-                self.generations[commit.sha] = max(self.generations[parent_sha] + 1, self.generations[commit.sha])
-                self.parents[commit.sha].add(parent_sha)
-                self.children[parent_sha].add(commit.sha)
-
-        self._complete_generations()
-
-        for tag in tags_by_tag_name.values():
-            self.tags_by_sha[tag.sha].append(tag)
-
-        self.tag_graph = self.build_tag_graph()
-        self.ordered_tags = self.order_tags()
-
-    def _build_chains(self) -> None:
-        """Build chains during setup."""
-        for sha in self.commits_by_sha:
-            if sha in self.chains:
-                continue
-            sha_chain = self.walk_chain(sha)
-            chain = Chain(self.children)
-            for chain_sha in sha_chain:
-                chain.add(self.commits_by_sha[sha])
-                self.chains[chain_sha] = chain
-
-    def _complete_generations(self) -> None:
-        """Fill in missing generation information."""
-        found = True
-        while found:
-            found = False
-            for sha in self.commits_by_sha:
-                for child_sha in self.children[sha]:
-                    if self.generations[child_sha] <= self.generations[sha]:
-                        found = True
-                        self.generations[child_sha] = self.generations[sha] + 1
-
-    def walk_chain(self, sha: str) -> list[str]:
-        """Find all shas connected to the start sha by single links."""
-        shas = [sha]
-        while True:
-            parents = self.parents[sha]
-            if len(parents) != 1:
-                break
-            parent = next(iter(parents))
-            siblings = self.children[parent]
-            if len(siblings) != 1:
-                break
-            sha = parent
-        shas.reverse()
-        sha = shas[-1]
-        while True:
-            children = self.children[sha]
-            if len(children) != 1:
-                break
-            child = next(iter(children))
-            siblings = self.parents[child]
-            if len(siblings) != 1:
-                break
-            shas.append(child)
-            sha = child
-        return shas
-
-    def is_ancestor(self, child_sha: str, possible_ancestor_sha: str) -> bool:
-        """Find all sha ancestors from a given sha."""
-        stack: list[str] = [child_sha]
-        found = set()
-        while stack:
-            sha = stack.pop()
-            if sha == possible_ancestor_sha:
-                return True
-            if sha in found:
-                continue
-            found.add(sha)
-            parents = self.parents.get(sha)
-            if not parents:
-                continue
-            for parent in parents:
-                if parent == possible_ancestor_sha:
-                    return True
-                if parent == sha or parent in found:
-                    continue
-                stack.append(parent)
-        return False
-
-    def build_tag_graph(self) -> dict[str, set[str]]:
-        """Build a graph of tags and their predecessors."""
-        ancestors: dict[str, set[str]] = defaultdict(set)
-        for sha, tags in self.tags_by_sha.items():
-            for possible_parent in tags:
-                possible_parent_sha = possible_parent.sha
-                if sha in ancestors[possible_parent_sha] or possible_parent_sha in ancestors[sha]:
-                    continue
-                if self.is_ancestor(sha, possible_parent_sha):
-                    ancestors[sha].add(possible_parent_sha)
-                elif self.is_ancestor(possible_parent_sha, sha):
-                    ancestors[possible_parent_sha].add(sha)
-        for sha, heritage in ancestors.items():
-            # remove anything also included in parent heritages
-            retained = set(heritage)
-            for item in heritage:
-                retained = retained - set(ancestors[item])
-            ancestors[sha] = retained
-
-        return ancestors
-
-    def order_tags(self) -> list[str]:
-        """Build a list of tags ordered by their hierarchy and commit date."""
-        ordered_tags = []
-        seen_tag_shas: set[str] = set()
-        tags_to_check = list(self.tag_graph.keys())
-        while tags_to_check:
-            leaves = [sha for sha in tags_to_check if not set(self.tag_graph[sha]) - seen_tag_shas]
-            for leaf in leaves:
-                tags_to_check.remove(leaf)
-                seen_tag_shas.add(leaf)
-            ordered_tags.extend(sorted(leaves, key=self.get_sha_date))
-        return ordered_tags
-
-    def get_sha_date(self, sha: str) -> str:
-        """Find the best-ish date for a given sha."""
-        dates = []
-        commit = self.commits_by_sha.get(sha)
-        if commit:
-            commit_date = commit.date
-            if commit_date:
-                dates.append(commit_date)
-        tags = self.tags_by_sha[sha]
-        for tag in tags:
-            dates.append(tag.tagger_date)
-            dates.append(tag.committer_date)
-            dates.append(tag.creator_date)
-        dates.append("The future")
-        return min(date for date in dates if date is not None and len(date))
-
-
 class Chain:
     """A series of commits that are connected by single paths."""
 
@@ -429,3 +276,252 @@ class Chain:
                 return x in self.seen
             case _:
                 return False
+
+
+@dataclass
+class WeightedSha:
+    """A distance plus a sha."""
+
+    weight: int
+    sha: str
+
+
+@dataclass
+class WeightedShas:
+    """A distance plus shas at that distance."""
+
+    distance: int
+    shas: set[str]
+
+
+class CommitTree:
+    """Builds information about the entire commit tree."""
+
+    commits_by_sha: dict[str, Commit]
+    tags_by_tag_name: dict[str, Tag]
+    tags_by_sha: dict[str, list[Tag]]
+
+    parents: dict[str, set[str]]
+    children: dict[str, set[str]]
+    chains: dict[str, Chain]
+    generations: dict[str, int]
+    closest_tag_shas: dict[str, set[str]]
+
+    def __init__(self, commits_by_sha: dict[str, Commit], tags_by_tag_name: dict[str, Tag]) -> None:
+        self.commits_by_sha = commits_by_sha
+        self.tags_by_tag_name = tags_by_tag_name
+        self.tags_by_sha = defaultdict(list)
+
+        self.tips: set[str] = set()
+        self.roots: set[str] = set()
+
+        self.parents = defaultdict(set)
+        self.children = defaultdict(set)
+        self.generations = {}
+        self.chains = self._build_chains()
+
+        for commit in self.commits_by_sha.values():
+            if commit.sha not in self.generations:
+                self.generations[commit.sha] = 1
+            for parent_sha in commit.parent_shas:
+                if parent_sha not in self.generations:
+                    self.generations[parent_sha] = 1
+                self.generations[commit.sha] = max(self.generations[parent_sha] + 1, self.generations[commit.sha])
+                self.parents[commit.sha].add(parent_sha)
+                self.children[parent_sha].add(commit.sha)
+        for commit in self.commits_by_sha.values():
+            if not self.children.get(commit.sha):
+                self.tips.add(commit.sha)
+            if not self.parents.get(commit.sha):
+                self.roots.add(commit.sha)
+
+        self._complete_generations()
+
+        for tag in tags_by_tag_name.values():
+            self.tags_by_sha[tag.sha].append(tag)
+
+        self.tag_graph = self.build_tag_graph()
+        self.ordered_tag_shas = self.order_tag_shas()
+        self.closest_tag_shas = self.build_closest_tag_shas()
+
+    def _build_chains(self) -> dict[str, Chain]:
+        """Build chains during setup."""
+        chains: dict[str, Chain] = {}
+        for sha in self.commits_by_sha:
+            if sha in chains:
+                continue
+            sha_chain = self.walk_chain(sha)
+            chain = Chain(self.children)
+            for chain_sha in sha_chain:
+                chain.add(self.commits_by_sha[sha])
+                chains[chain_sha] = chain
+        return chains
+
+    def walk_chain(self, sha: str) -> list[str]:
+        """Find all shas connected to the start sha by single links."""
+        shas = [sha]
+        while True:
+            parents = self.parents[sha]
+            if len(parents) != 1:
+                break
+            parent = next(iter(parents))
+            siblings = self.children[parent]
+            if len(siblings) != 1:
+                break
+            sha = parent
+        shas.reverse()
+        sha = shas[-1]
+        while True:
+            children = self.children[sha]
+            if len(children) != 1:
+                break
+            child = next(iter(children))
+            siblings = self.parents[child]
+            if len(siblings) != 1:
+                break
+            shas.append(child)
+            sha = child
+        return shas
+
+    def _complete_generations(self) -> None:
+        """Fill in missing generation information."""
+        stack: list[str] = list(self.tips)
+        seen: set[str] = set()
+        while stack:
+            sha = stack.pop(0)
+            if sha in seen:
+                continue
+            seen.add(sha)
+            children = self.children[sha]
+            if not children:
+                self.generations[sha] = 1
+            else:
+                my_depth = self.generations.get(sha) or 1
+                max_depth = max(self.generations[child_sha] for child_sha in children)
+                self.generations[sha] = max(my_depth, max_depth + 1)
+            stack.extend(self.parents.get(sha) or [])
+
+    def is_ancestor(self, child_sha: str, possible_ancestor_sha: str) -> bool:
+        """Find all sha ancestors from a given sha."""
+        stack: list[str] = [child_sha]
+        found = set()
+        while stack:
+            sha = stack.pop()
+            if sha == possible_ancestor_sha:
+                return True
+            if sha in found:
+                continue
+            found.add(sha)
+            parents = self.parents.get(sha)
+            if not parents:
+                continue
+            for parent in parents:
+                if parent == possible_ancestor_sha:
+                    return True
+                if parent == sha or parent in found:
+                    continue
+                stack.append(parent)
+        return False
+
+    def build_tag_graph(self) -> dict[str, set[str]]:
+        """Build a graph of tags and their predecessors."""
+        ancestors: dict[str, set[str]] = defaultdict(set)
+        for sha, tags in self.tags_by_sha.items():
+            for possible_parent in tags:
+                possible_parent_sha = possible_parent.sha
+                if sha in ancestors[possible_parent_sha] or possible_parent_sha in ancestors[sha]:
+                    continue
+                if self.is_ancestor(sha, possible_parent_sha):
+                    ancestors[sha].add(possible_parent_sha)
+                elif self.is_ancestor(possible_parent_sha, sha):
+                    ancestors[possible_parent_sha].add(sha)
+        for sha, heritage in ancestors.items():
+            # remove anything also included in parent heritages
+            retained = set(heritage)
+            for item in heritage:
+                retained = retained - set(ancestors[item])
+            ancestors[sha] = retained
+
+        return ancestors
+
+    def order_tag_shas(self) -> list[str]:
+        """Build a list of tags ordered by their hierarchy and commit date."""
+        ordered_tags = []
+        seen_tag_shas: set[str] = set()
+        tags_to_check = list(self.tag_graph.keys())
+        while tags_to_check:
+            leaves = [sha for sha in tags_to_check if not set(self.tag_graph[sha]) - seen_tag_shas]
+            for leaf in leaves:
+                tags_to_check.remove(leaf)
+                seen_tag_shas.add(leaf)
+            ordered_tags.extend(sorted(leaves, key=self.get_sha_date))
+        return ordered_tags
+
+    def get_sha_date(self, sha: str) -> str:
+        """Find the best-ish date for a given sha."""
+        dates = []
+        commit = self.commits_by_sha.get(sha)
+        if commit:
+            commit_date = commit.date
+            if commit_date:
+                dates.append(commit_date)
+        tags = self.tags_by_sha[sha]
+        for tag in tags:
+            dates.append(tag.tagger_date)
+            dates.append(tag.committer_date)
+            dates.append(tag.creator_date)
+        dates.append("The future")
+        return min(date for date in dates if date is not None and len(date))
+
+    def get_closest_tags(self, sha: str) -> list[Tag]:
+        """Find all tags closest to a given sha."""
+        tags = self.tags_by_sha[sha]
+        if tags:
+            return tags
+        closest_tag_shas = self.closest_tag_shas.get(sha)
+        closest_tags = []
+        if closest_tag_shas:
+            for close_tag_sha in closest_tag_shas:
+                tags = self.tags_by_sha[close_tag_sha]
+                closest_tags.extend(tags)
+            closest_tags.extend(tags)
+        return closest_tags
+
+    def build_closest_tag_shas(self) -> dict[str, set[str]]:
+        """Build a lookup of shas to their closest tag shas."""
+        closest_tag_shas: dict[str, WeightedShas] = {}
+        for tag_sha in self.ordered_tag_shas:
+            self.walk_from_sha(tag_sha, closest_tag_shas)
+        return {sha: ws.shas for sha, ws in closest_tag_shas.items()}
+
+    def walk_from_sha(self, tag_sha: str, closest_tag_sha: dict[str, WeightedShas]) -> None:
+        """Find all sha ancestors from a given sha."""
+        found = set()
+        weighted_sha = WeightedSha(0, tag_sha)
+        stack: list[WeightedSha] = [weighted_sha]
+        while stack:
+            weighted_sha = stack.pop()
+            if weighted_sha.sha in found:
+                continue
+            found.add(weighted_sha.sha)
+            parents = self.parents.get(weighted_sha.sha)
+            if not parents:
+                continue
+            weight = weighted_sha.weight + 1
+            for parent in parents:
+                weighted_parent = WeightedSha(weight, parent)
+                if parent not in closest_tag_sha:
+                    closest_tag_sha[parent] = WeightedShas(weight, {tag_sha})
+                    stack.append(weighted_parent)
+                else:
+                    old_weighted_shas = closest_tag_sha[parent]
+                    if old_weighted_shas.distance > weight:
+                        closest_tag_sha[parent] = WeightedShas(weight, {tag_sha})
+                        stack.append(weighted_parent)
+                    elif old_weighted_shas.distance == weight:
+                        old_weighted_shas.shas.add(tag_sha)
+                        stack.append(weighted_parent)
+                    else:
+                        # we've already seen this parent in another context
+                        # so leave it alone
+                        pass
