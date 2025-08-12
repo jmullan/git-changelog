@@ -241,7 +241,7 @@ def resolve_authors(authors: list[Author], mailmap_authors: list[Author]) -> lis
             if to_address and to_address.address != from_author.address:
                 to_author = to_address
             to_email = get_by_lower_key_if_key_is_not_none(email_mappings, from_author.original_email)
-            if not to_author and to_email and  to_email.address != from_author.address:
+            if not to_author and to_email and to_email.address != from_author.address:
                 to_author = to_email
             to_name = get_by_lower_key_if_key_is_not_none(name_mappings, from_author.original_name)
             if not to_author and to_name and to_name.address != from_author.address:
