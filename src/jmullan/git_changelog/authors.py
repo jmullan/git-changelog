@@ -195,7 +195,9 @@ def extract_coauthors(sha_range: ShaRange, files: list[str] | None) -> list[Auth
 def add_by_lower_key_if_key_is_not_none(to_dict: dict[str, T], key: str | None, value: T) -> None:
     """Add the value to a dictionary if the key is not None."""
     if key is not None:
-        to_dict[key.lower().strip()] = value
+        key = key.lower().strip()
+        if key not in to_dict:
+            to_dict[key] = value
 
 
 def get_by_lower_key_if_key_is_not_none[V](from_dict: dict[str, V], key: str | None) -> V | None:
@@ -235,14 +237,14 @@ def resolve_authors(authors: list[Author], mailmap_authors: list[Author]) -> lis
     for source in [mailmap_authors, authors]:
         for from_author in source:
             to_author = None
-            to_address = get_by_lower_key_if_key_is_not_none(address_mappings, from_author.address)
+            to_address = get_by_lower_key_if_key_is_not_none(address_mappings, from_author.original_address)
             if to_address and to_address.address != from_author.address:
                 to_author = to_address
-            to_email = get_by_lower_key_if_key_is_not_none(email_mappings, from_author.email)
-            if to_email and not to_author and to_email.address != from_author.address:
+            to_email = get_by_lower_key_if_key_is_not_none(email_mappings, from_author.original_email)
+            if not to_author and to_email and  to_email.address != from_author.address:
                 to_author = to_email
-            to_name = get_by_lower_key_if_key_is_not_none(name_mappings, from_author.name)
-            if to_name and not to_author and to_name.address != from_author.address:
+            to_name = get_by_lower_key_if_key_is_not_none(name_mappings, from_author.original_name)
+            if not to_author and to_name and to_name.address != from_author.address:
                 to_author = to_name
             if not to_author:
                 to_author = from_author
@@ -261,16 +263,18 @@ def resolve_authors(authors: list[Author], mailmap_authors: list[Author]) -> lis
 
 def finalize_authors(combined_authors: list[Author]) -> list[Author]:
     """Remove and resolve duplicate authors."""
-    mapped_addresses: set[str] = set()
+    changed_addresses: set[str] = set()
+    replacement_addresses: set[str] = set()
     for combined_author in combined_authors:
         if combined_author.address != combined_author.original_address:
-            mapped_addresses.add(combined_author.original_address)
-
+            changed_addresses.add(combined_author.original_address)
+            replacement_addresses.add(combined_author.address)
     finalized_authors: dict[str, Author] = {}
     for author in combined_authors:
+        new_address = author.address
         original_address = author.original_address
-        if author.address != original_address or original_address not in mapped_addresses:
-            finalized_authors[author.full] = author
+        if new_address != original_address or new_address not in replacement_addresses:
+            finalized_authors[original_address] = author
     return list(finalized_authors.values())
 
 
