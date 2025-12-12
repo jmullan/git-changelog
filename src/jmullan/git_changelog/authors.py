@@ -68,7 +68,7 @@ class Author:
     @property
     def full(self) -> str:
         """Get the full mapping from original to replaced."""
-        return f"{self.original_address}:{self.address}:{self.original_username}:{self.username}"
+        return f"[{self.username}] {self.address} [{self.original_username}] {self.original_address}"
 
 
 def get_username_from_email(email: str) -> str:
@@ -118,10 +118,20 @@ def load_mailmap() -> list[Author]:
     return authors
 
 
-def extract_authors(
-    sha_range: ShaRange,
-    files: list[str] | None,
-) -> list[Author]:
+def extract_committers(sha_range: ShaRange, files: list[str] | None) -> list[Author]:
+    """Build a list of committers from git logs."""
+    fields = {
+        "original_email": "ce",
+        "email": "cE",
+        "original_username": "cl",
+        "username": "cL",
+        "original_name": "cn",
+        "name": "cN",
+    }
+    return extract_people(sha_range, files, fields)
+
+
+def extract_authors(sha_range: ShaRange, files: list[str] | None) -> list[Author]:
     """Build a list of authors from git logs."""
     fields = {
         "original_email": "ae",
@@ -131,6 +141,10 @@ def extract_authors(
         "original_name": "an",
         "name": "aN",
     }
+    return extract_people(sha_range, files, fields)
+
+
+def extract_people(sha_range: ShaRange, files: list[str] | None, fields: dict[str, str]) -> list[Author]:
     fields_format = "%h".join(f"{x}:%{x}" for x in fields.values())
     git_format = f"%h {fields_format}"
     uniques: set[str] = set()
@@ -225,28 +239,32 @@ def resolve_authors(authors: list[Author], mailmap_authors: list[Author]) -> lis
     address_mappings: dict[str, Author] = {}
     for source in [mailmap_authors, authors]:
         for author in source:
+            print(f"adding {author.original_address}")
+            add_by_lower_key_if_key_is_not_none(address_mappings, author.original_address, author)
             add_by_lower_key_if_key_is_not_none(email_mappings, author.original_email, author)
             add_by_lower_key_if_key_is_not_none(email_mappings, author.email, author)
             add_by_lower_key_if_key_is_not_none(name_mappings, author.original_username, author)
             add_by_lower_key_if_key_is_not_none(name_mappings, author.username, author)
             add_by_lower_key_if_key_is_not_none(name_mappings, author.original_name, author)
             add_by_lower_key_if_key_is_not_none(name_mappings, author.name, author)
-            add_by_lower_key_if_key_is_not_none(address_mappings, author.original_address, author)
             add_by_lower_key_if_key_is_not_none(address_mappings, author.address, author)
     combined_authors: list[Author] = []
     for source in [mailmap_authors, authors]:
         for from_author in source:
+            print(f"seeking {from_author.original_address}")
             to_author = None
             to_address = get_by_lower_key_if_key_is_not_none(address_mappings, from_author.original_address)
             if to_address and to_address.address != from_author.address:
                 to_author = to_address
-            to_email = get_by_lower_key_if_key_is_not_none(email_mappings, from_author.original_email)
-            if not to_author and to_email and to_email.address != from_author.address:
-                to_author = to_email
-            to_name = get_by_lower_key_if_key_is_not_none(name_mappings, from_author.original_name)
-            if not to_author and to_name and to_name.address != from_author.address:
-                to_author = to_name
-            if not to_author:
+            if to_author is None:
+                to_email = get_by_lower_key_if_key_is_not_none(email_mappings, from_author.original_email)
+                if not to_author and to_email and to_email.address != from_author.address:
+                    to_author = to_email
+            if to_author is None:
+                to_name = get_by_lower_key_if_key_is_not_none(name_mappings, from_author.original_name)
+                if not to_author and to_name and to_name.address != from_author.address:
+                    to_author = to_name
+            if to_author is None:
                 to_author = from_author
             new_author = Author(
                 original_email=from_author.original_email,
@@ -426,8 +444,11 @@ class AuthorsMain(cmd.Main):
 
         sha_range = ShaRange(from_sha, from_inclusive, to_sha, to_inclusive)
         authors = extract_authors(sha_range, files)
+        committers = extract_committers(sha_range, files)
+        coauthors = extract_coauthors(sha_range, files)
+
         output_authors(
-            authors,
+            authors + committers + coauthors,
             self.args.format,
             self.args.ordering,
             self.args.reversed,
