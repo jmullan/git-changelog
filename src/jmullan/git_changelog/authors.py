@@ -239,7 +239,6 @@ def resolve_authors(authors: list[Author], mailmap_authors: list[Author]) -> lis
     address_mappings: dict[str, Author] = {}
     for source in [mailmap_authors, authors]:
         for author in source:
-            print(f"adding {author.original_address}")
             add_by_lower_key_if_key_is_not_none(address_mappings, author.original_address, author)
             add_by_lower_key_if_key_is_not_none(email_mappings, author.original_email, author)
             add_by_lower_key_if_key_is_not_none(email_mappings, author.email, author)
@@ -251,7 +250,6 @@ def resolve_authors(authors: list[Author], mailmap_authors: list[Author]) -> lis
     combined_authors: list[Author] = []
     for source in [mailmap_authors, authors]:
         for from_author in source:
-            print(f"seeking {from_author.original_address}")
             to_author = None
             to_address = get_by_lower_key_if_key_is_not_none(address_mappings, from_author.original_address)
             if to_address and to_address.address != from_author.address:
