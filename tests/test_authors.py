@@ -96,16 +96,14 @@ def test_resolve_names_authors():
     mailmap_authors = [make_author(a) for a in mailmap_jans]
     resolved = authors.resolve_authors(sample_authors, mailmap_authors)
 
-    # we expect T Chase because that is a mapped to-address and the other has an
-    # identical from and to
-
     expected = [
-        "[a] foo <a@b> [a] bar <a@b>",
-        "[a] foo <a@b> [a] baz <a@b>",
-        "[a] foo <a@b> [a] qqq <a@b>",
-        "[a] foo <a@b> [a] rrr <a@b>",
-        "[a] foo <a@b> [a] sss <a@b>",
-    ]
+        '[a] bar <a@b> [a] bar <a@b>',
+        '[a] baz <a@b> [a] baz <a@b>',
+        '[a] foo <a@b> [a] foo <a@b>',
+        '[a] qqq <a@b> [a] qqq <a@b>',
+        '[a] rrr <a@b> [a] rrr <a@b>',
+        '[a] sss <a@b> [a] sss <a@b>'
+     ]
     assert expected == [a.full for a in resolved]
 
 
@@ -144,3 +142,10 @@ def test_resolve_names_authors2():
         "[sss] sss <sss@b> [a] sss <a@b>",
     ]
     assert expected == [a.full for a in resolved]
+
+def test_is_address():
+    assert not authors.is_address("foo")
+    assert not authors.is_address("foo@bar")
+    assert not authors.is_address("foo foo@bar")
+    assert authors.is_address("foo <foo@bar>")
+    assert authors.is_address("foo foo <foo@bar>")

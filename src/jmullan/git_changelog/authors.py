@@ -7,13 +7,15 @@ import logging
 import pathlib
 import re
 import sys
-from typing import TextIO, TypeVar
+from typing import TextIO, TypeVar, Set
+
+from jmullan.cmd import cmd
+from jmullan.logging import easy_logging
 
 from jmullan.git_changelog import changelog
 from jmullan.git_changelog.models import Direction, Inclusiveness, ShaRange
-from jmullan.logging import easy_logging
-
-from jmullan.cmd import cmd
+from simple_term_menu import TerminalMenu
+import pyinputplus
 
 logger = logging.getLogger(__name__)
 
@@ -22,13 +24,19 @@ formats = {
     "csv": "{email},{username},{name}",
     "mailmap": "correct name <email> wrong name <email>",
     "pyproject": "The authors stanza of a pyproject.toml",
+    "dump": "All the author information",
 }
 FORMAT_DOC = "\n  ".join(f"{x}: {y}" for x, y in formats.items())
 DEFAULT_FORMAT = "simple"
 orderings = ["appearance", "email", "name"]
 DEFAULT_ORDERING = "appearance"
-
+ADD_OPTION = "*** ADD ***"
+IS_ADDRESS_REGEX = re.compile(r"^[^<]+ <[^@>]+@[^@>]+>$")
 T = TypeVar("T")
+
+
+def is_address(address: str | None) -> bool:
+    return re.match(IS_ADDRESS_REGEX, address) is not None
 
 
 def open_file_or_stdout_for_writing(filename: str | None) -> TextIO:
@@ -71,6 +79,19 @@ class Author:
         return f"[{self.username}] {self.address} [{self.original_username}] {self.original_address}"
 
 
+@dataclasses.dataclass
+class AuthorCluster:
+    prime_author_address: str
+    author_addresses: Set[str]
+
+    @property
+    def lower_addresses(self) -> set[str]:
+        all_addresses = [self.prime_author_address, * self.author_addresses]
+        return set(x.lower() for x in all_addresses)
+
+    def contains(self, address: str) -> bool:
+        return address.lower() in self.lower_addresses
+
 def get_username_from_email(email: str) -> str:
     """Extract just the username from an email."""
     if email is None:
@@ -81,11 +102,19 @@ def get_username_from_email(email: str) -> str:
     return email
 
 
-def load_mailmap() -> list[Author]:
+def load_mail_maps() -> list[Author]:
     """Load the mailmap into a list of Authors."""
-    mail_map_path = pathlib.Path(".mailmap")
-    if not mail_map_path.exists():
-        return []
+
+    authors = []
+    start = pathlib.Path.cwd()
+    for directory in (start, *start.parents):
+        candidate = directory / ".mailmap"
+        if candidate.is_file():
+            authors.extend(load_mail_map(candidate))
+    return authors
+
+
+def load_mail_map(mail_map_path: pathlib.Path):
     uniques: set[str] = set()
     authors: list[Author] = []
     with mail_map_path.open() as fp:
@@ -214,6 +243,13 @@ def add_by_lower_key_if_key_is_not_none(to_dict: dict[str, T], key: str | None, 
             to_dict[key] = value
 
 
+def update_by_lower_key_if_key_is_not_none(to_dict: dict[str, T], key: str | None, value: T) -> None:
+    """Add the value to a dictionary if the key is not None."""
+    if key is not None:
+        key = key.lower().strip()
+        to_dict[key] = value
+
+
 def get_by_lower_key_if_key_is_not_none[V](from_dict: dict[str, V], key: str | None) -> V | None:
     """Get a value from a dictionary if the key is not None."""
     if key is not None:
@@ -221,7 +257,37 @@ def get_by_lower_key_if_key_is_not_none[V](from_dict: dict[str, V], key: str | N
     return None
 
 
-def resolve_authors(authors: list[Author], mailmap_authors: list[Author]) -> list[Author]:
+def resolve_author(
+    from_author: Author,
+    email_mappings: dict[str, Author],
+    name_mappings: dict[str, Author],
+    address_mappings: dict[str, Author],
+):
+    to_author = None
+    to_address = get_by_lower_key_if_key_is_not_none(address_mappings,
+                                                     from_author.original_address)
+    if to_address and to_address.address != from_author.address:
+        to_author = to_address
+    elif to_author is None:
+        to_name = get_by_lower_key_if_key_is_not_none(name_mappings,
+                                                      from_author.original_name)
+        if not to_author and to_name and to_name.address != from_author.address:
+            to_author = to_name
+    elif to_author is None:
+        to_email = get_by_lower_key_if_key_is_not_none(email_mappings,
+                                                       from_author.original_email)
+        if not to_author and to_email and to_email.address != from_author.address:
+            to_author = to_email
+    if to_author is None:
+        to_author = from_author
+    return to_author
+
+def resolve_authors(
+    authors: list[Author],
+    mailmap_authors: list[Author],
+    all_mailmap_authors: list[Author] = None,
+    manual_resolution: bool = False
+) -> list[Author]:
     """Produce a list of authors for a dot-mail-map.
 
     Given a list of authors and a list from the mailmap, produce a combined list that
@@ -234,11 +300,20 @@ def resolve_authors(authors: list[Author], mailmap_authors: list[Author]) -> lis
     This is just to produce a single list for mailmap purposes -- git already maps items
     from the log.
     """
+    if all_mailmap_authors is None:
+        all_mailmap_authors = []
     email_mappings: dict[str, Author] = {}
     name_mappings: dict[str, Author] = {}
     address_mappings: dict[str, Author] = {}
-    for source in [mailmap_authors, authors]:
+    authors_by_address: dict[str, Author] = {}
+    addresses_to_resolve: set[str] = set()
+    for source in [authors]:
+        for from_author in source:
+            addresses_to_resolve.add(from_author.original_address.lower())
+            addresses_to_resolve.add(from_author.address.lower())
+    for source in [mailmap_authors, all_mailmap_authors, authors]:
         for author in source:
+            authors_by_address[author.original_address] = author
             add_by_lower_key_if_key_is_not_none(address_mappings, author.original_address, author)
             add_by_lower_key_if_key_is_not_none(email_mappings, author.original_email, author)
             add_by_lower_key_if_key_is_not_none(email_mappings, author.email, author)
@@ -247,23 +322,75 @@ def resolve_authors(authors: list[Author], mailmap_authors: list[Author]) -> lis
             add_by_lower_key_if_key_is_not_none(name_mappings, author.original_name, author)
             add_by_lower_key_if_key_is_not_none(name_mappings, author.name, author)
             add_by_lower_key_if_key_is_not_none(address_mappings, author.address, author)
+    if manual_resolution:
+        author_clusters: list[AuthorCluster] = []
+        for source in [mailmap_authors, all_mailmap_authors, authors]:
+            for from_author in source:
+                to_author = resolve_author(from_author, email_mappings, name_mappings, address_mappings)
+                addresses = {
+                    from_author.original_address,
+                    from_author.address,
+                    to_author.original_address,
+                    to_author.address,
+                }
+                found_author_cluster = None
+                for author_cluster in author_clusters:
+                    if author_cluster.contains(to_author.address):
+                        found_author_cluster = author_cluster
+                        break
+                if found_author_cluster is None:
+                    found_author_cluster = AuthorCluster(to_author.address, addresses)
+                    author_clusters.append(found_author_cluster)
+                for address in addresses:
+                    found_author_cluster.author_addresses.add(address)
+        for author_cluster in sorted(author_clusters, key=lambda x: x.prime_author_address):
+            if not addresses_to_resolve.intersection(author_cluster.lower_addresses):
+                continue
+            print(f"-> {author_cluster.prime_author_address}")
+            fixing_cluster = True
+            while fixing_cluster:
+                options = [*author_cluster.author_addresses, ADD_OPTION]
+                menu_entry_index = options.index(author_cluster.prime_author_address)
+                terminal_menu = TerminalMenu(options, menu_cursor="    > ", cursor_index=menu_entry_index, skip_empty_entries=True)
+                menu_entry_index = terminal_menu.show()
+                if menu_entry_index is None:
+                    break
+                if menu_entry_index < 0 or menu_entry_index > len(options):
+                    continue
+                selected = options[menu_entry_index]
+                if selected == ADD_OPTION:
+                    allowed_regexes = [IS_ADDRESS_REGEX]
+                    bad_regexes = [re.escape(option) for option in options]
+                    new_option = pyinputplus.inputStr(allowRegexes=allowed_regexes, blockRegexes=bad_regexes)
+                    if new_option and is_address(new_option):
+                        author_cluster.author_addresses.add(new_option)
+                        author_cluster.prime_author_address = new_option
+                    else:
+                        print(f"    X BAD ADDRESS: {new_option}")
+                else:
+                    author_cluster.prime_author_address = options[menu_entry_index]
+                    fixing_cluster = False
+
+            prime_author = None
+            if author_cluster.prime_author_address:
+                prime_author = authors_by_address.get(author_cluster.prime_author_address)
+
+            for address in sorted(author_cluster.author_addresses):
+                if address == author_cluster.prime_author_address:
+                    print(f"    + {address}")
+                else:
+                    if prime_author:
+                        update_by_lower_key_if_key_is_not_none(
+                            address_mappings,
+                            address,
+                            prime_author)
+                    print(f"    - {address}")
+
     combined_authors: list[Author] = []
     for source in [mailmap_authors, authors]:
         for from_author in source:
-            to_author = None
-            to_address = get_by_lower_key_if_key_is_not_none(address_mappings, from_author.original_address)
-            if to_address and to_address.address != from_author.address:
-                to_author = to_address
-            if to_author is None:
-                to_email = get_by_lower_key_if_key_is_not_none(email_mappings, from_author.original_email)
-                if not to_author and to_email and to_email.address != from_author.address:
-                    to_author = to_email
-            if to_author is None:
-                to_name = get_by_lower_key_if_key_is_not_none(name_mappings, from_author.original_name)
-                if not to_author and to_name and to_name.address != from_author.address:
-                    to_author = to_name
-            if to_author is None:
-                to_author = from_author
+            to_author = resolve_author(from_author, email_mappings, name_mappings, address_mappings)
+
             new_author = Author(
                 original_email=from_author.original_email,
                 email=to_author.email,
@@ -294,6 +421,25 @@ def finalize_authors(combined_authors: list[Author]) -> list[Author]:
     return list(finalized_authors.values())
 
 
+def output_dump(authors: list[Author], output_handle: TextIO) -> None:
+    """Write authors to a CSV file or stdout."""
+
+    print(f"Dumping", file=output_handle)
+    for author in authors:
+        line = f"""
+{author.original_email} {author.email}
+{author.original_name} {author.name}
+{author.original_username} {author.username}
+""".replace("\n", " ")
+        original_email: str
+        email: str
+        original_name: str
+        name: str
+        original_username: str
+        username: str
+        print(f"{line}", file=output_handle)
+
+
 def output_csv(authors: list[Author], output_handle: TextIO) -> None:
     """Write authors to a CSV file or stdout."""
     seen_lines: set[str] = set()
@@ -306,11 +452,13 @@ def output_csv(authors: list[Author], output_handle: TextIO) -> None:
             seen_lines.add(line)
 
 
-def output_mailmap(authors: list[Author], output_handle: TextIO) -> None:
+def output_mailmap(authors: list[Author], output_handle: TextIO, manual_resolution: bool) -> None:
     """Write authors to a mail map file or stdout."""
     seen_lines: set[str] = set()
-    mailmap_authors = load_mailmap()
-    for author in resolve_authors(authors, mailmap_authors):
+    all_mailmap_authors = load_mail_maps()
+    mailmap_authors = load_mail_map(pathlib.Path(".mailmap")
+)
+    for author in resolve_authors(authors, mailmap_authors, all_mailmap_authors, manual_resolution):
         line = f"{author.address} {author.original_address}"
         if line not in seen_lines:
             print(f"{line}", file=output_handle)
@@ -340,6 +488,7 @@ def output_authors(
     output_format: str | None,
     ordering: str | None,
     direction: Direction,
+    manual_resolution: bool,
     output: str | None = None,
 ) -> None:
     """Print the authors in your chosen format."""
@@ -359,9 +508,11 @@ def output_authors(
         if output_format == "csv":
             output_csv(authors, output_handle)
         elif output_format == "mailmap":
-            output_mailmap(authors, output_handle)
+            output_mailmap(authors, output_handle, manual_resolution)
         elif output_format == "pyproject":
             output_pyproject(authors, output_handle)
+        elif output_format == "dump":
+            output_dump(authors, output_handle)
         else:
             output_list(authors, output_handle)
 
@@ -423,6 +574,13 @@ class AuthorsMain(cmd.Main):
             default="-",
             help="Write the output somewhere. Default: stdout",
         )
+        self.parser.add_argument(
+            "--manual",
+            dest="manual",
+            action="store_true",
+            default=False,
+            help="Do a manual resolution step",
+        )
 
     def main(self) -> None:
         """Print the authors of this repo."""
@@ -449,7 +607,8 @@ class AuthorsMain(cmd.Main):
             authors + committers + coauthors,
             self.args.format,
             self.args.ordering,
-            self.args.reversed,
+            self.args.reversed or False,
+            self.args.manual or False,
             output,
         )
 

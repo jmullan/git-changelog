@@ -19,7 +19,10 @@ keywords = ["git"]
 dependencies = [
     "jmullan.logging@git+https://github.com/jmullan/jmullan.logging",
     "jmullan.cmd@git+https://github.com/jmullan/jmullan.cmd",
-    "rich"
+    "rich",
+    "simple-term-menu",
+    "pyinputplus",
+
 ]
 
 [project.optional-dependencies]
