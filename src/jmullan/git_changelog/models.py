@@ -44,6 +44,13 @@ class UseTags(BooleanEnum):
     TRUE = True
 
 
+class ManualResolution(BooleanEnum):
+    """Perform manual mail map resolution."""
+
+    FALSE = False
+    TRUE = True
+
+
 class Direction(enum.Enum):
     """Boolean-ish definitions."""
 

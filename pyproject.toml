@@ -120,6 +120,9 @@ lint.ignore = [
 # Only ignore variables named "_".
 lint.dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?)|args|kwargs)$"
 
+[tool.ruff.lint.pylint]
+max-args = 8
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
     "ANN",     # Missing type annotations

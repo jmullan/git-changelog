@@ -73,8 +73,6 @@ def test_dupe_authors():
         "[jan.reed] Jan Reed <jan.reed@example.com> [jreed] Jannett Reed <jreed@example.com>",
         "[jan.reed] Jan Reed <jan.reed@example.com> [jreed] Jan Reed <jreed@example.com>",
         "[jan.reed] Jan Reed <jan.reed@example.com> [jan.reed] Jannett Reed <jan.reed@example.com>",
-        # is ok?
-        # "[jan.reed] Jan Reed <jan.reed@example.com> [jan.reed] Jan Reed <jan.reed@example.com>",
         "[tchase] Tatsuo Chase <tchase@example.com> [tchase] T Chase <tchase@example.com>",
     ]
     assert expected == [a.full for a in resolved]
@@ -97,13 +95,13 @@ def test_resolve_names_authors():
     resolved = authors.resolve_authors(sample_authors, mailmap_authors)
 
     expected = [
-        '[a] bar <a@b> [a] bar <a@b>',
-        '[a] baz <a@b> [a] baz <a@b>',
-        '[a] foo <a@b> [a] foo <a@b>',
-        '[a] qqq <a@b> [a] qqq <a@b>',
-        '[a] rrr <a@b> [a] rrr <a@b>',
-        '[a] sss <a@b> [a] sss <a@b>'
-     ]
+        "[a] bar <a@b> [a] bar <a@b>",
+        "[a] baz <a@b> [a] baz <a@b>",
+        "[a] foo <a@b> [a] foo <a@b>",
+        "[a] qqq <a@b> [a] qqq <a@b>",
+        "[a] rrr <a@b> [a] rrr <a@b>",
+        "[a] sss <a@b> [a] sss <a@b>",
+    ]
     assert expected == [a.full for a in resolved]
 
 
@@ -142,6 +140,7 @@ def test_resolve_names_authors2():
         "[sss] sss <sss@b> [a] sss <a@b>",
     ]
     assert expected == [a.full for a in resolved]
+
 
 def test_is_address():
     assert not authors.is_address("foo")
